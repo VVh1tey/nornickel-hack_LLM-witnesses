@@ -9,5 +9,6 @@ COPY . .
 RUN uv sync
 
 EXPOSE 8000
+EXPOSE 8051
 
-CMD ["uv", "run", "main.py"]
+CMD ["uv", "run", "streamlit", "run", "app.py"]
