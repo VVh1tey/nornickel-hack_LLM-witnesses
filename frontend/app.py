@@ -20,10 +20,13 @@ class LLMsWitnessUi:
         if 'respones'  not in self.state:
             self.state.responses = []
         if 'constraints' not in self.state:
-            self.state.constraints = ''
+            self.state.constraints = str()
+
+        if 'weights' not in self.state:
+            self.state.weights = dict()
 
         if 'goal' not in self.state:
-            self.state.goal = ''
+            self.state.goal = str()
         try:
             with open('../configs/api.json', 'r') as f:
                 data = json.load(f)
@@ -33,6 +36,8 @@ class LLMsWitnessUi:
         except Exception as e:
             raise Exception(f'Problem with api config[[\n{e}\n]]]')
 
+    def export(self):
+        ...
 
     def readme(self):
         ...
@@ -52,10 +57,11 @@ class LLMsWitnessUi:
         if st.button('Send data', type='primary', width='stretch'):
             try:
                 if self.state.files and self.state.goal:
-                    json = {
-                        'goal':self.state.goal,
-                        'contrains': self.state.constrains if self.state.constrains else None   
-                    }
+                    json = {'goal':self.state.goal}
+                    if self.state.constrains:
+                        json = json | self.state.constrains
+                    if self.state.weights:
+                        json = json | self.state.weights
 
                     files = {filename: BytesIO(file.getvalue()) for filename, file in self.state.files.items()}
                     status = requests.post(self.addr + HANDLE_POST, files=files, json=json)
@@ -68,15 +74,29 @@ class LLMsWitnessUi:
                 st.error(f"Error: {e}")
 
     def draw_responses(self):
+        """
+
+        {"goal": "Тестовая цель для Postgres", "error": null, 
+        "status": "done", 
+            "weights": {"risk": 1.0, "impact": 1.0, "novelty": 1.0, "feasibility": 1.0},
+            "progress": [], 
+            "created_at": "2026-07-04T13:28:08.693429+00:00", 
+            "hypotheses": [], 
+            "session_id": "test-session-1",
+            "constraints": "нет ограничений"
+        }
+
+        """
+            
         if self.state.responses:
             for r in self.state.responses:
-                st.table(r)
+                ...
         else:
             st.text("🐭 nothing, use fetch")
 
     def write_goal(self):
         if self.state.goal:
-            st.write({'goal':self.state.goal, 'constraints': self.state.constraints})
+            st.write({'goal':self.state.goal, 'constraints': self.state.constraints, 'weights': self.state.weights})
 
     def show_files(self):
         if self.state.files:
@@ -91,13 +111,23 @@ class LLMsWitnessUi:
         if create_button and goal:
             self.state.goal = goal
             st.rerun()
-        else:
-            if not goal:
-                st.info('send me not None pls')
         if self.state.goal:
                 self.write_goal()
-        
-        
+
+    def input_weights(self):
+        risk = st.slider('risk', 0, 10)
+        impact = st.slider('impact', 0, 10)
+        novelty = st.slider('novelty', 0, 10)
+        feasibility = st.slider('feasibility', 0, 10)
+
+
+        if st.button('Add weights', width='stretch'):
+            self.state.weights['risk'] = int(risk)
+            self.state.weights['impact'] = int(impact)
+            self.state.weights['novelty'] = int(novelty)
+            self.state.weights['feasibility'] = int(feasibility)
+            st.rerun()
+            
     def load_file(self):
         file = st.file_uploader('Upload files', FILE_TYPES)
         if file: 
@@ -117,6 +147,7 @@ class LLMsWitnessUi:
                 if st.button('Update constraints', width='stretch'):
                     self.state.constraints = constraints
                     st.rerun()
+                self.input_weights()
 
 
             if self.state.goal:
