@@ -58,13 +58,14 @@ class LLMsWitnessUi:
         if not self.state.session_id:
             st.warning("No active session to export")
             return
-        
+
         # Генерируем уникальный ключ
         if unique_id is None:
             unique_id = str(uuid.uuid4())[:8]
-        
+
         button_key = f"export_{format}_{unique_id}"
-        
+        data_key = f"export_data_{button_key}"
+
         if st.button(f'📤 Export as {format.upper()}', type='secondary', key=button_key, width=256):
             with st.spinner(f'Exporting as {format.upper()}...'):
                 try:
@@ -73,17 +74,29 @@ class LLMsWitnessUi:
                         params={'format': format}
                     )
                     if response.status_code == 200:
-                        st.success(f'✅ Export to {format.upper()} completed')
-                        # Показываем результат
-                        if format == "json":
-                            st.json(response.json())
-                        else:
-                            st.code(response.text[:500] + "..." if len(response.text) > 500 else response.text)
+                        # response.content - сырые байты: для docx (бинарный zip)
+                        # response.text пытается декодировать их как текст и
+                        # выдаёт нечитаемую кашу вместо настоящего файла.
+                        st.session_state[data_key] = response.content
                     else:
                         st.error(f'❌ Export failed: {response.status_code}')
                         st.code(response.text)
                 except Exception as e:
                     st.error(f'❌ Error: {e}')
+
+        if data_key in st.session_state:
+            mime_map = {
+                "csv": "text/csv",
+                "json": "application/json",
+                "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            }
+            st.download_button(
+                f'💾 Download {format.upper()}',
+                data=st.session_state[data_key],
+                file_name=f"{self.state.session_id}.{format}",
+                mime=mime_map.get(format, "application/octet-stream"),
+                key=f"dl_{button_key}",
+            )
 
     def readme(self):
         """Отображает информацию о приложении"""

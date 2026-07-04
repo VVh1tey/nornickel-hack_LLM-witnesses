@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 from hypofactory.llm.client import get_client
 from hypofactory.schemas import Hypothesis, RoadmapStep
@@ -22,7 +22,11 @@ ROADMAP_PROMPT = """Гипотеза: {statement}
 
 
 class RoadmapDraft(BaseModel):
-    steps: list[RoadmapStep] = Field(default_factory=list)
+    # Без default_factory — иначе модель, ответив валидным JSON с русским
+    # ключом верхнего уровня вместо "steps", молча проходит валидацию с
+    # пустым списком вместо запуска repair-retry (см. тот же баг и фикс в
+    # generator.py: HypothesisDraftList).
+    steps: list[RoadmapStep]
 
 
 async def build_roadmap(hyp: Hypothesis) -> list[RoadmapStep]:

@@ -1,0 +1,9 @@
+.git
+**/.venv
+**/__pycache__
+**/*.pyc
+.env
+data/
+Задача 1. Фабрика гипотез/
+*.html
+backend/eval/last_report.json

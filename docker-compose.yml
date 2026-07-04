@@ -93,7 +93,7 @@ services:
     profiles: ["tools"]
     environment:
       - OLLAMA_HOST=http://ollama:11434
-    entrypoint: ["ollama", "pull", "qwen3.5:4b"]
+    entrypoint: ["ollama", "pull", "qwen2.5:7b"]
     depends_on:
       - ollama
 
@@ -243,15 +243,18 @@ services:
     volumes:
       - langfuse-postgres-data:/var/lib/postgresql/data
 
-  # frontend (Streamlit, отдельный человек) подключается к api по http://api:8000
-  # frontend:
-  #   build: ./frontend
-  #   ports:
-  #     - "8501:8501"
-  #   environment:
-  #     - API_BASE_URL=http://api:8000
-  #   depends_on:
-  #     - api
+  # Streamlit-фронтенд. configs/api.json (host=localhost) — для локального
+  # запуска streamlit вне Docker; в контейнере подменяем на api.docker.json
+  # (host=api — имя сервиса в docker-сети), т.к. app.py читает "../configs/api.json"
+  # относительно WORKDIR /app -> монтируем именно в /configs/api.json.
+  frontend:
+    build: ./frontend
+    ports:
+      - "8501:8501"
+    volumes:
+      - ./configs/api.docker.json:/configs/api.json:ro
+    depends_on:
+      - api
 
 volumes:
   hf-cache:

@@ -33,7 +33,7 @@ YC_VISION_MODEL = os.getenv("YC_VISION_MODEL", "gemma-3-27b-it")
 
 # Ollama (локальный маленький Qwen, сервис в docker-compose.yml)
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
-OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen3.5:4b")
+OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen2.5:7b")
 
 LLM_CACHE_DIR = DATA_DIR / "llm_cache"
 

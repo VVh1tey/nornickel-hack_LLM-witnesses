@@ -5,53 +5,140 @@
 (Excel), на выходе — ранжированный список проверяемых гипотез с обоснованием,
 ссылками на источники, оценкой новизны/риска/эффекта и дорожной картой проверки.
 
-Полная архитектура и таск-борд — в `PLAN.md`. Ниже — как поднять бэкенд и что
-у него за API (фронтенд — отдельный сервис, подключается по HTTP).
+Состоит из двух независимых сервисов:
+- **backend/** — FastAPI + LangGraph-пайплайн (этот README в основном про него)
+- **frontend/** — Streamlit-интерфейс, ходит в backend по HTTP
 
-## Архитектура (коротко)
+Полная история решений и таск-борд хакатона — в `PLAN.md` (расширять не нужно,
+там прошлое; актуальная документация — здесь).
+
+## Как это работает (для тех, кто не писал код)
+
+Есть два разных процесса, которые легко перепутать:
+
+### 1. Разовая офлайн-подготовка: построение графа знаний
+
+Это происходит **один раз** (и заново — только когда добавляются новые
+документы), не на каждый запрос пользователя:
+
+```
+Учебники (PDF) + регламенты (сканы/PNG) + Excel-примеры + DOCX с реальными
+гипотезами экспертов
+        │
+        ▼
+build_corpus.py  — превращает всё это в один corpus.jsonl (текстовые чанки)
+        │
+        ▼
+index_lightrag.py — скармливает corpus.jsonl в LightRAG: для каждого файла
+                    LLM извлекает сущности (минералы, оборудование, параметры
+                    режима...) и связи между ними → граф знаний (GraphML) +
+                    векторный индекс чанков (Qdrant)
+```
+
+Без этого шага RAG (поиск по базе знаний) в пайплайне просто ничего не найдёт —
+граф изначально пуст. Как запустить и следить за прогрессом — см.
+[«Индексация корпуса»](#индексация-корпуса-в-lightrag) ниже.
+
+### 2. Обработка одного запроса пользователя: 8-узловой пайплайн
+
+Это происходит **на каждый запрос** (`POST /api/sessions`), уже поверх готового
+графа знаний:
 
 ```
 Excel хвостов ──► Tails Analyzer (pandas) ──► LossFinding[] ─┐
-                                                              ├─► Generator (LLM) ─► Verification ─► Ranker ─► Roadmap ─► API
+                                                              ├─► Generator (LLM) ─► Verification ─► Ranker ─► Roadmap
 Цель + ограничения ──► TargetSpec (LLM) ──► Query Builder ───┘         ▲
                                                                         │
-Учебники/схемы/регламенты/DOCX-гипотезы ──► LightRAG (граф + Qdrant) ──┘
+                                            Retrieval (LightRAG: граф + Qdrant) ─┘
 ```
 
-Инфраструктура: **Ollama** (локальный Qwen, LLM по умолчанию) или **YandexGPT**
-(`yandex-ai-studio-sdk`) — переключатель `LLM_PROVIDER`; **bge-m3** локально или
-**Yandex text-embeddings-v2** — переключатель `EMBEDDING_PROVIDER`; **Qdrant** —
-векторный индекс LightRAG; **Postgres** — история сессий. Всё поднимается
-`docker-compose.yml`. Без вообще какого-либо провайдера — прозрачный `FakeLLM`
-(`HYPOFACTORY_FAKE_LLM=1`), пайплайн и тесты работают полностью без сети.
+1. **Analyzer** — детерминированный разбор Excel хвостов (без LLM): какие
+   элементы/классы крупности/минеральные формы теряются и почему (pandas-правила).
+2. **Target Spec** — LLM превращает свободный текст цели/ограничений в
+   структурированную задачу (KPI, ограничения, оборудование).
+3. **Query Builder** — по находкам анализа строит 5-10 поисковых запросов к базе знаний.
+4. **Retrieval** — эти запросы идут в LightRAG (режим `mix`: граф + вектора),
+   возвращаются релевантные чанки/сущности/связи.
+5. **Generator** — LLM на основе находок + контекста из RAG + реальных примеров
+   гипотез с других фабрик (few-shot, сгруппированный по технологическим сферам —
+   классификация/измельчение/флотация/автоматизация, чтобы не копировать
+   пропорции тем few-shot) генерирует 8-15 новых гипотез.
+6. **Verification** — для каждой гипотезы: не нарушает ли ограничения (LLM),
+   не совпадает ли по сути с уже опробованным (эмбеддинг-поиск + LLM-подтверждение),
+   правдоподобен ли механизм с точки зрения физики/химии (LLM-критик).
+7. **Ranker** — LLM-судья оценивает каждую гипотезу по 4 критериям (новизна,
+   реализуемость, эффект, риск) 1-5; взвешенная сумма — по весам из UI, без LLM.
+8. **Roadmap** — для топ-5 гипотез LLM строит шаги лабораторной/промышленной
+   проверки с ресурсами и критериями успеха.
 
-## Быстрый старт (Docker)
+Каждый узел — обычный async-вызов нашего `llm/client.py` (Ollama или Yandex),
+не через LangChain — поэтому в Langfuse трейсится и уровень узлов (через
+LangGraph `CallbackHandler`), и содержимое каждого отдельного вызова LLM
+(вручную, `tracing.py`).
+
+## Быстрый старт (Docker, весь стек)
 
 ```bash
 cp .env.example .env
-docker compose up -d ollama qdrant postgres    # локальный стек (без ключей Yandex)
-docker compose run --rm ollama-pull            # разово: скачать модель qwen3.5:4b
-docker compose build
-docker compose up api                          # http://localhost:8000
+# сгенерировать секреты Langfuse (см. таблицу переменных ниже) и вписать в .env
+
+docker compose up -d ollama qdrant postgres langfuse-postgres langfuse-clickhouse langfuse-minio langfuse-redis langfuse-worker langfuse-web
+docker compose run --rm ollama-pull            # разово: скачать модель qwen2.5:7b
+
+docker compose up --build api frontend -d
 ```
 
-Индексация корпуса в LightRAG (фоном — вызовы LLM на извлечение сущностей,
-на маленькой локальной модели это часы на полном корпусе):
+- Backend API: http://localhost:8000
+- Frontend (Streamlit): http://localhost:8501
+- Langfuse (трейс вызовов LLM): http://localhost:3000
+- Qdrant dashboard: http://localhost:6333/dashboard
+
+**Важно про `--build`**: не запускай несколько `docker compose build`
+параллельно в разных терминалах — на Windows/WSL2 это может уронить Docker
+Desktop (VHDX не размонтируется). Один `docker compose up --build <сервисы> -d`
+за раз — безопасно, он сам последовательно/параллельно соберёт указанные сервисы.
+
+### Индексация корпуса в LightRAG
 
 ```bash
-docker compose run --rm indexer
+docker compose --profile tools up -d indexer   # фоном
+docker compose logs -f indexer                 # следить за прогрессом
 ```
 
-Проверить, что активный LLM-провайдер вообще отвечает, ДО индексации:
+На маленькой локальной модели (Ollama, CPU/GPU) это может занять от получаса
+до нескольких часов на полном корпусе (десятки книг/файлов, у каждого файла —
+внутренние чанки, на каждый чанк отдельный вызов LLM на извлечение сущностей).
+Резюмируется безопасно: LightRAG дедуплицирует по имени файла и кэширует
+LLM-ответы, повторный запуск на уже обработанных файлах бесплатен.
+
+Проверить прогресс, не читая логи целиком:
 
 ```bash
-cd backend && uv run python scripts/check_llm.py
+docker exec <indexer-контейнер> python -c "
+import json
+from collections import Counter
+d = json.load(open('/app/data/lightrag/kv_store_doc_status.json', encoding='utf-8'))
+print(len(d), 'файлов в очереди/обработано')
+print(Counter(v.get('status') for v in d.values()))
+"
+curl http://localhost:8000/api/debug/graph/stats   # растущее число узлов/рёбер
 ```
+
+### Добавление нового документа в корпус
+
+1. Положить файл в `Задача 1. Фабрика гипотез/Задача 1/...` (туда, куда смотрит `build_corpus.py`)
+2. Пересобрать корпус: `cd backend && uv run python scripts/build_corpus.py`
+   (перегенерирует `corpus.jsonl`/`hypotheses_db.json`/`equipment.json`)
+3. Проиндексировать: `docker compose --profile tools up -d indexer` — обработается
+   только новый файл, старые не пересчитаются (дедуп + кэш)
+
+Отдельной кнопки «загрузить документ» в UI сейчас нет — это ручной процесс
+через файловую систему + пересборку корпуса, не через фронтенд.
 
 ## Разработка (uv, без Docker)
 
-`pyproject.toml`/`uv.lock` бэка и фронта разделены — команды `uv` запускаются
-**из `backend/`** (или `frontend/` — для фронта отдельно):
+`pyproject.toml`/`uv.lock` у бэка и фронта раздельные (осознанное решение) —
+команды `uv` запускаются **из соответствующей директории**:
 
 ```bash
 cd backend
@@ -62,17 +149,44 @@ uv run pytest                               # тесты
 uv run uvicorn hypofactory.api.app:app --reload
 ```
 
+```bash
+cd frontend
+uv sync
+uv run streamlit run app.py                # http://localhost:8501, читает ../configs/api.json
+```
+
 Для разработки без Docker нужны локально доступные `ollama serve`
-(`ollama pull qwen3.5:4b`), Qdrant (`docker run -p 6333:6333 qdrant/qdrant`) и
+(`ollama pull qwen2.5:7b`), Qdrant (`docker run -p 6333:6333 qdrant/qdrant`) и
 Postgres — либо просто `docker compose up -d ollama qdrant postgres` и работать
 с `api`/скриптами через `uv run` (сервисы слушают на localhost).
+
+## Фронтенд (Streamlit) — что есть где
+
+Три вкладки:
+
+- **🎯 Goal Studio** — загрузка Excel, ввод цели (свободный текст, например
+  «Снизить потери элементов 28 и 29 с хвостами») и ограничений, настройка весов
+  критериев ранжирования (слайдеры Relevance/Novelty/Feasibility/Impact),
+  запуск сессии. Кнопка **Rerank** здесь же — пересчитывает итоговый score по
+  новым весам **без повторного вызова LLM** (оценки 1-5 по каждому критерию уже
+  посчитаны один раз при генерации, rerank просто пересортировывает список) —
+  можно жать сколько угодно раз, мгновенно и бесплатно.
+- **💡 Hypotheses** — список сгенерированных гипотез с кнопками **👍 Approve** /
+  **👎 Reject** (human-in-the-loop фидбэк, пишется в сессию через
+  `POST .../feedback`).
+- **📊 Analytics** — детали сессии (ID, статус, цель/ограничения/веса), прогресс
+  по узлам пайплайна, кнопки экспорта.
+
+**Export as CSV / JSON / DOCX** — после нажатия появляется отдельная кнопка
+**💾 Download** с реальным файлом (сохранённые байты ответа API, а не
+предпросмотр на странице).
 
 ## Переменные окружения (`.env`)
 
 | Переменная | Назначение |
 |---|---|
 | `LLM_PROVIDER` | `ollama` (локальный Qwen, по умолчанию) \| `yandex` |
-| `OLLAMA_BASE_URL`, `OLLAMA_MODEL` | адрес Ollama и модель (по умолчанию `qwen3.5:4b`) |
+| `OLLAMA_BASE_URL`, `OLLAMA_MODEL` | адрес Ollama и модель (по умолчанию `qwen2.5:7b`) |
 | `YC_FOLDER_ID`, `YC_API_KEY` | доступ к Yandex AI Studio (нужны только при `LLM_PROVIDER=yandex` и/или `EMBEDDING_PROVIDER=yandex`) |
 | `YC_MODEL` | модель генерации/экстракции YandexGPT (по умолчанию `yandexgpt`) |
 | `YC_VISION_MODEL` | модель для описания схем/регламентов (`gemma-3-27b-it` — единственная с поддержкой изображений на момент написания; у Ollama-провайдера vision не реализован) |
@@ -82,6 +196,9 @@ Postgres — либо просто `docker compose up -d ollama qdrant postgres`
 | `POSTGRES_DSN` | строка подключения к Postgres (история сессий) |
 | `LLM_MAX_CONCURRENCY` | лимит параллельных вызовов LLM и эмбеддингов |
 | `HYPOFACTORY_FAKE_LLM=1` | форсировать `FakeLLM`/фейковые эмбеддинги независимо от провайдера (тесты, отладка без сети вообще) |
+| `LANGFUSE_HOST`, `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY` | трейс вызовов LLM (self-hosted Langfuse, см. ниже) |
+| `LANGFUSE_SALT`, `LANGFUSE_ENCRYPTION_KEY`, `LANGFUSE_NEXTAUTH_SECRET`, `LANGFUSE_PG_PASSWORD`, `LANGFUSE_CLICKHOUSE_PASSWORD`, `LANGFUSE_MINIO_PASSWORD`, `LANGFUSE_REDIS_AUTH` | секреты self-hosted Langfuse-стека (сгенерировать: `openssl rand -hex 16` / `32` / `12`, см. `.env.example`) |
+| `LANGFUSE_INIT_USER_EMAIL`, `LANGFUSE_INIT_USER_PASSWORD` | логин/пароль для входа в Langfuse UI при первом старте |
 
 ## API
 
@@ -99,14 +216,6 @@ Postgres — либо просто `docker compose up -d ollama qdrant postgres`
 | GET | `/api/sessions/{id}/hypotheses/{hid}/graph` | HTML-граф сущностей/связей вокруг гипотезы |
 | GET | `/api/debug/graph` | HTML всего графа знаний целиком (у LightRAG в этой интеграции нет своего дашборда) |
 | GET | `/api/debug/graph/stats` | JSON: сколько узлов/рёбер в графе |
-
-Дашборды: Qdrant — `http://localhost:6333/dashboard`; Postgres — любой клиент
-(psql/DBeaver/PyCharm) по `POSTGRES_DSN` (`localhost:5432`, `hypofactory`/`hypofactory`).
-Граф LightRAG — сохранить и открыть в браузере:
-```bash
-curl http://localhost:8000/api/debug/graph -o graph.html
-start graph.html   # PowerShell/cmd; на Linux/macOS — open/xdg-open graph.html
-```
 
 Примеры:
 
@@ -134,9 +243,40 @@ curl -X POST http://localhost:8000/api/sessions/<session_id>/rerank \
 curl -OJ http://localhost:8000/api/sessions/<session_id>/export?format=docx
 ```
 
+## Оценка качества (deepeval)
+
+```bash
+cd backend && uv run python eval/run_eval.py
+```
+
+Гоняет полный пайплайн на held-out Примере 4 (ТОФ — единственный, чьи реальные
+гипотезы экспертов НЕ входят ни в few-shot генератора, ни в базу «уже
+пробовали»), считает:
+- **Coverage vs эксперты** — сколько из 8 реальных гипотез экспертов ТОФ
+  воспроизвёл пайплайн (LLM-judge на смысловое совпадение)
+- **GEval** (настоящий deepeval) — конкретность/проверяемость каждой гипотезы
+- существующие ranker-оценки, для полноты картины
+
+Результат — на экран, в `backend/eval/last_report.json` и в наглядный
+`backend/eval/last_report.html` (открыть в браузере).
+
+## Дашборды и наблюдаемость
+
+- **Qdrant** (векторный индекс LightRAG): `http://localhost:6333/dashboard`
+- **Postgres** (история сессий): любой клиент (psql/DBeaver/PyCharm) по
+  `POSTGRES_DSN` (`localhost:5432`, `hypofactory`/`hypofactory`)
+- **Langfuse** (трейс каждого вызова LLM — узлы пайплайна + отдельные
+  запросы/ответы генератора/верификатора/ранкера/roadmap): `http://localhost:3000`
+- **Граф знаний LightRAG** (у самого LightRAG нет встроенного дашборда в этой
+  интеграции) — сохранить и открыть в браузере:
+  ```bash
+  curl http://localhost:8000/api/debug/graph -o graph.html
+  start graph.html   # PowerShell/cmd; на Linux/macOS — open/xdg-open graph.html
+  ```
+
 ## Известные ограничения
 
-- Одна из 5 книг в «Дополнительные материалы» — скан без текстового слоя
+- Одна из книг в «Дополнительные материалы» — скан без текстового слоя
   (`geokniga_lodeyshchikovvv...pdf`, 455 стр.); нужен постраничный vision-OCR,
   сейчас не индексируется (дорого по API за отведённое время).
 - Held-out: «Гипотезы ТОФ.docx» (Пример 4) используется только для
@@ -144,8 +284,10 @@ curl -OJ http://localhost:8000/api/sessions/<session_id>/export?format=docx
   «уже пробовали» — иначе оценка качества на нём была бы нечестной.
 - `LLM_PROVIDER=ollama` не поддерживает vision (описание схем/регламентов) —
   для ingestion картинок нужен `LLM_PROVIDER=yandex`.
-- Реранкер (bge-reranker) и LightRAG `insert_custom_kg` из сидов equipment.json —
-  в cut-list, не реализованы (см. PLAN.md §8).
+- LightRAG выводит в логи `WARNING: Rerank is enabled but no rerank model is
+  configured` — реранкер не подключён (не критично для качества, просто
+  предупреждение); `insert_custom_kg` из сидов equipment.json — тоже не
+  реализован (см. PLAN.md §8).
 - Если `check_llm.py`/пайплайн с `LLM_PROVIDER=yandex` падает с
   `PERMISSION_DENIED`/`403` при заполненных ключах — у сервисного аккаунта нет
   роли `ai.languageModels.user` (или аналогичной для эмбеддингов) на каталоге
@@ -154,3 +296,7 @@ curl -OJ http://localhost:8000/api/sessions/<session_id>/export?format=docx
 - `ainsert()` в LightRAG дедуплицирует по basename файла — `index_lightrag.py`
   поэтому склеивает чанки одного файла обратно в один документ перед вставкой
   (иначе индексируется только первый чанк каждого файла).
+- Интерфейс фронтенда сейчас на английском (лейблы кнопок/полей) — перевод на
+  русский не сделан из-за нехватки времени.
+- Кнопки/флоу «добавить документ в корпус» в UI нет — см.
+  [«Добавление нового документа в корпус»](#добавление-нового-документа-в-корпус) выше (ручной процесс).

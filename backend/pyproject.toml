@@ -30,8 +30,12 @@ dependencies = [
     "fastapi",
     "uvicorn[standard]",
     "python-multipart",
-    # трейс вызовов LLM (self-hosted Langfuse, docker-compose.yml)
+    # трейс вызовов LLM (self-hosted Langfuse, docker-compose.yml). langchain
+    # нужен только для langfuse.langchain.CallbackHandler (трейсинг узлов
+    # LangGraph) — сам граф на langchain не завязан, это чисто зависимость
+    # интеграции Langfuse.
     "langfuse",
+    "langchain",
     # UI / визуализация (Streamlit-фронт делает другой человек отдельно;
     # pyvis/networkx нужны бэку для генерации HTML-графа гипотезы)
     "pyvis",

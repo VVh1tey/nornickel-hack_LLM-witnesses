@@ -38,7 +38,10 @@ GENERATOR_SYSTEM_PROMPT = """Ты — эксперт-исследователь 
 в формате "file_path: цитата")
 - НЕ дублируй дословно ни один из примеров реальных гипотез — это база для стиля, а не для копирования
 
-Отвечай только на русском языке. Верни строго JSON по схеме."""
+Отвечай только на русском языке. Верни строго JSON по схеме — ключи JSON
+(hypotheses, statement, mechanism, expected_effect, related_findings,
+source_quotes) оставляй ровно такими, как в схеме, НЕ переводи их на русский —
+переводить нужно только значения (текст самих гипотез)."""
 
 
 class HypothesisDraft(BaseModel):
@@ -50,7 +53,13 @@ class HypothesisDraft(BaseModel):
 
 
 class HypothesisDraftList(BaseModel):
-    hypotheses: list[HypothesisDraft] = Field(default_factory=list)
+    # Без default_factory: модель иногда отвечает валидным JSON, но с
+    # русскими ключами верхнего уровня ("гипотезы" вместо "hypotheses") —
+    # с default_factory pydantic молча подставлял [] вместо ошибки валидации,
+    # и repair-retry в acomplete_json ни разу не срабатывал (проверено на
+    # реальной сессии: 8/8 узлов "done", но 0 гипотез на выходе). Обязательное
+    # поле превращает это в настоящую ValidationError -> запускает repair.
+    hypotheses: list[HypothesisDraft]
 
 
 def _parse_source_quote(raw: str) -> SourceRef:
