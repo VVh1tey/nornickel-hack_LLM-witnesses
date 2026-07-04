@@ -165,3 +165,53 @@ KPI: {spec.kpi or "не указан явно"}
             )
         )
     return hypotheses
+
+
+REVISE_SYSTEM_PROMPT = (
+    "Ты — эксперт-исследователь в области обогащения полезных ископаемых. "
+    "Тебе дают гипотезу и комментарий эксперта-практика с производства — "
+    "перепиши гипотезу с учётом этого комментария, сохраняя тот же формат "
+    "(конкретное техническое изменение + механизм + ожидаемый эффект). "
+    "Отвечай только на русском языке. Верни строго JSON по схеме."
+)
+
+REVISE_PROMPT = """Исходная гипотеза: {statement}
+Механизм: {mechanism}
+Ожидаемый эффект: {expected_effect}
+
+Комментарий эксперта: {comment}
+
+КОНТЕКСТ ИЗ ЛИТЕРАТУРЫ/РЕГЛАМЕНТОВ:
+{context}
+
+Перепиши гипотезу с учётом комментария эксперта."""
+
+
+class HypothesisRevision(BaseModel):
+    statement: str
+    mechanism: str
+    expected_effect: str
+
+
+async def revise_hypothesis(hyp: Hypothesis, comment: str, retrieval: RetrievalResult) -> Hypothesis:
+    """Перегенерация ОДНОЙ гипотезы с учётом свободного комментария эксперта
+    (HITL) — id и источники сохраняются, verify/rank/roadmap запускаются
+    заново вызывающим кодом (api/app.py), т.к. содержание изменилось."""
+    client = get_client()
+    prompt = REVISE_PROMPT.format(
+        statement=hyp.statement,
+        mechanism=hyp.mechanism,
+        expected_effect=hyp.expected_effect,
+        comment=comment,
+        context=_format_context(retrieval),
+    )
+    revision = await client.acomplete_json(prompt, HypothesisRevision, system_prompt=REVISE_SYSTEM_PROMPT)
+    return Hypothesis(
+        id=hyp.id,
+        statement=revision.statement,
+        mechanism=revision.mechanism,
+        expected_effect=revision.expected_effect,
+        sources=hyp.sources,
+        related_findings=hyp.related_findings,
+        comment=comment,
+    )

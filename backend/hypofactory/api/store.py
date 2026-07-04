@@ -45,6 +45,7 @@ class SessionState:
         goal: str,
         constraints: str = "",
         weights: Optional[RankingWeights] = None,
+        name: Optional[str] = None,
     ) -> None:
         self.session_id = session_id
         self.created_at = datetime.now(timezone.utc).isoformat()
@@ -55,10 +56,12 @@ class SessionState:
         self.progress: list[PipelineStatus] = []
         self.hypotheses: list[Hypothesis] = []
         self.error: Optional[str] = None
+        self.name: Optional[str] = name  # человекочитаемое имя сессии, задаётся/меняется пользователем
 
     def to_dict(self) -> dict:
         return {
             "session_id": self.session_id,
+            "name": self.name,
             "created_at": self.created_at,
             "goal": self.goal,
             "constraints": self.constraints,
@@ -76,6 +79,7 @@ class SessionState:
             d["goal"],
             d.get("constraints", ""),
             RankingWeights(**d["weights"]) if d.get("weights") else RankingWeights(),
+            d.get("name"),
         )
         session.created_at = d["created_at"]
         session.status = d["status"]
@@ -128,6 +132,7 @@ async def list_sessions(limit: int = 20, offset: int = 0) -> list[dict]:
         result.append(
             {
                 "session_id": row["session_id"],
+                "name": data.get("name"),
                 "created_at": row["created_at"].isoformat(),
                 "goal": row["goal"],
                 "status": row["status"],

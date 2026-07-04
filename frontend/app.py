@@ -13,6 +13,8 @@ HANDLE_GET_ALL = '/api/sessions'
 HANDLE_RERANK = '/api/sessions/{session_id}/rerank'
 HANDLE_EXPORT = '/api/sessions/{session_id}/export'
 HANDLE_FEEDBACK = '/api/sessions/{session_id}/hypotheses/{hypothesis_id}/feedback'
+HANDLE_REGENERATE = '/api/sessions/{session_id}/hypotheses/{hypothesis_id}/regenerate'
+HANDLE_RENAME = '/api/sessions/{session_id}/name'
 
 FILE_TYPES = ['xls', 'xlsx']
 
@@ -39,6 +41,8 @@ class LLMsWitnessUi:
             self.state.is_loading = False
         if 'export_counter' not in self.state:
             self.state.export_counter = 0
+        if 'session_name' not in self.state:
+            self.state.session_name = str()
 
         try:
             with open('../configs/api.json', 'r') as f:
@@ -207,6 +211,8 @@ class LLMsWitnessUi:
                         'goal': self.state.goal,
                         'constraints': self.state.constraints if self.state.constraints else ""
                     }
+                    if self.state.session_name:
+                        data['name'] = self.state.session_name
 
                     # Добавляем веса как JSON строку
                     if self.state.weights:
@@ -235,12 +241,15 @@ class LLMsWitnessUi:
                 except Exception as e:
                     st.error(f"❌ Ошибка: {e}")
 
-    def send_feedback(self, session_id: str, hypothesis_id: str, action: str, unique_id: str):
+    def send_feedback(self, session_id: str, hypothesis_id: str, action: str, unique_id: str, comment: str = None):
         """Отправка обратной связи по гипотезе"""
         try:
+            body = {'action': action}
+            if comment:
+                body['comment'] = comment
             response = requests.post(
                 self.addr + HANDLE_FEEDBACK.replace('{session_id}', session_id).replace('{hypothesis_id}', hypothesis_id),
-                json={'action': action}
+                json=body
             )
             if response.status_code == 200:
                 st.success(f'✅ Отправлен фидбэк: {action}')
@@ -250,6 +259,47 @@ class LLMsWitnessUi:
                 st.rerun()
             else:
                 st.error(f'❌ Не удалось отправить фидбэк: {response.status_code}')
+        except Exception as e:
+            st.error(f'❌ Ошибка: {e}')
+
+    def send_regenerate(self, session_id: str, hypothesis_id: str, comment: str):
+        """Переписать гипотезу с учётом комментария эксперта (LLM) и заново её проверить/оценить"""
+        if not comment or not comment.strip():
+            st.warning('⚠️ Напишите комментарий — с чем не согласны и что поправить')
+            return
+        try:
+            with st.spinner('Переписываем гипотезу с учётом комментария и пересчитываем оценки...'):
+                response = requests.post(
+                    self.addr + HANDLE_REGENERATE.replace('{session_id}', session_id).replace('{hypothesis_id}', hypothesis_id),
+                    json={'comment': comment.strip()}
+                )
+            if response.status_code == 200:
+                st.success('✅ Гипотеза переписана')
+                self.get_session_data(session_id)
+                time.sleep(0.5)
+                st.rerun()
+            else:
+                st.error(f'❌ Не удалось перегенерировать: {response.status_code}')
+                st.code(response.text)
+        except Exception as e:
+            st.error(f'❌ Ошибка: {e}')
+
+    def send_rename(self, session_id: str, new_name: str):
+        """Переименовать сессию"""
+        if not new_name or not new_name.strip():
+            st.warning('⚠️ Введите имя сессии')
+            return
+        try:
+            response = requests.post(
+                self.addr + HANDLE_RENAME.replace('{session_id}', session_id),
+                json={'name': new_name.strip()}
+            )
+            if response.status_code == 200:
+                st.success('✅ Сессия переименована')
+                self.get_session_data(session_id)
+                st.rerun()
+            else:
+                st.error(f'❌ Не удалось переименовать: {response.status_code}')
         except Exception as e:
             st.error(f'❌ Ошибка: {e}')
 
@@ -330,8 +380,9 @@ class LLMsWitnessUi:
             session_id = session.get('session_id', 'N/A')
             status = session.get('status', 'unknown')
             status_emoji = "🟢" if status == "done" else "🟡" if status == "running" else "🔴"
+            display_name = session.get('name') or f"{session_id[:8]}..."
 
-            with st.expander(f"{status_emoji} Сессия: {session_id[:8]}... (статус: {status})"):
+            with st.expander(f"{status_emoji} {display_name} (статус: {status})"):
                 col1, col2 = st.columns(2)
 
                 with col1:
@@ -382,6 +433,27 @@ class LLMsWitnessUi:
                                         help="Отметить гипотезу как отклонённую экспертом",
                                     ):
                                         self.send_feedback(session_id, hyp_id, "reject", unique_key)
+
+                            with st.expander("💬 Комментарий эксперта и перегенерация"):
+                                st.caption(
+                                    "Не согласны с формулировкой? Опишите, что поправить — "
+                                    "LLM перепишет гипотезу с учётом комментария и заново "
+                                    "пересчитает проверки (ограничения/дубликаты/физика) и оценки."
+                                )
+                                comment_val = st.text_area(
+                                    'Комментарий',
+                                    value=hyp.get('comment') or '',
+                                    key=f"comment_{unique_key}",
+                                    placeholder="Например: учесть, что гидроциклоны уже заменены в прошлом году, предложи что-то другое",
+                                    height=80,
+                                    label_visibility="collapsed",
+                                )
+                                if st.button(
+                                    "🔄 Перегенерировать с учётом комментария",
+                                    key=f"regen_{unique_key}",
+                                    help="Переписать эту гипотезу заново (LLM), с учётом комментария выше — id и место в списке сохранятся",
+                                ):
+                                    self.send_regenerate(session_id, hyp_id, comment_val)
 
                             st.divider()
                 else:
@@ -462,6 +534,33 @@ class LLMsWitnessUi:
                     ):
                         del self.state.files[filename]
                         st.rerun()
+
+    def input_session_name(self):
+        """Ввод человекочитаемого имени сессии (задаётся до отправки; для уже
+        созданной сессии — переименование через рядом стоящую кнопку)"""
+        with st.container():
+            st.subheader("🏷️ Имя сессии")
+            if not self.state.session_id:
+                self.state.session_name = st.text_input(
+                    'Название сессии (необязательно)',
+                    value=self.state.session_name,
+                    placeholder="Например: KGMK tails Aug",
+                    help="Человекочитаемое имя вместо ID — удобно находить сессию в списке позже",
+                )
+            else:
+                col1, col2 = st.columns([3, 1])
+                with col1:
+                    new_name = st.text_input(
+                        'Переименовать текущую сессию',
+                        value=self.state.session_name,
+                        key="rename_input",
+                    )
+                with col2:
+                    st.write("")
+                    st.write("")
+                    if st.button('✏️ Переименовать', key="rename_btn", help="Сохранить новое имя для активной сессии"):
+                        self.send_rename(self.state.session_id, new_name)
+                        self.state.session_name = new_name
 
     def input_goal(self):
         """Ввод цели"""
@@ -641,7 +740,8 @@ class LLMsWitnessUi:
             # Информация о сессии
             if self.state.session_id:
                 st.divider()
-                st.caption(f"📌 Активная сессия: `{self.state.session_id[:8]}...`")
+                session_label = (self.state.session_data or {}).get('name') or f"{self.state.session_id[:8]}..."
+                st.caption(f"📌 Активная сессия: `{session_label}`")
                 if self.state.session_data:
                     status = self.state.session_data.get('status', 'unknown')
                     st.caption(f"📊 Статус: {status}")
@@ -657,6 +757,9 @@ class LLMsWitnessUi:
 
             # Отображение загруженных файлов
             self.show_files()
+
+            # Имя сессии
+            self.input_session_name()
 
             # Ввод цели
             self.input_goal()
@@ -689,9 +792,9 @@ class LLMsWitnessUi:
             st.header("📊 Аналитика")
 
             if self.state.session_data:
-                st.subheader("📋 Детали сессии")
-
                 data = self.state.session_data
+                st.subheader(f"📋 Детали сессии — {data.get('name') or data.get('session_id', 'N/A')[:12]}")
+
                 col1, col2 = st.columns(2)
 
                 with col1:
@@ -712,14 +815,39 @@ class LLMsWitnessUi:
                     for item in progress:
                         st.info(item)
 
-                # Количество гипотез
+                # Аналитика по гипотезам: разбивка статусов + таблица оценок
                 hypotheses = data.get('hypotheses', [])
                 if hypotheses:
                     st.subheader(f"💡 Гипотезы ({len(hypotheses)})")
-                    for i, hyp in enumerate(hypotheses, 1):
-                        st.markdown(f"**{i}.** {hyp.get('statement', 'Нет текста')}")
-                        if hyp.get('score'):
-                            st.caption(f"Оценка: {hyp.get('score'):.2f}")
+
+                    approved = sum(1 for h in hypotheses if h.get('status') == 'approved')
+                    rejected = sum(1 for h in hypotheses if h.get('status') == 'rejected')
+                    pending = len(hypotheses) - approved - rejected
+                    scores = [h.get('score') for h in hypotheses if h.get('score') is not None]
+                    avg_score = sum(scores) / len(scores) if scores else None
+
+                    m1, m2, m3, m4 = st.columns(4)
+                    m1.metric("👍 Принято", approved)
+                    m2.metric("👎 Отклонено", rejected)
+                    m3.metric("⏳ Без решения", pending)
+                    m4.metric("📊 Средний score", f"{avg_score:.2f}" if avg_score is not None else "—")
+
+                    st.caption("Разбивка по критериям ранжирования (см. подсказки в «Цель и параметры» → «Веса»)")
+                    rows = [
+                        {
+                            "#": i,
+                            "Гипотеза": (hyp.get('statement', 'Нет текста')[:70] + "…")
+                            if len(hyp.get('statement', '')) > 70 else hyp.get('statement', 'Нет текста'),
+                            "Новизна": hyp.get('novelty'),
+                            "Реализуемость": hyp.get('feasibility'),
+                            "Эффект": hyp.get('impact'),
+                            "Риск": hyp.get('risk'),
+                            "Score": hyp.get('score'),
+                            "Статус": hyp.get('status'),
+                        }
+                        for i, hyp in enumerate(hypotheses, 1)
+                    ]
+                    st.dataframe(rows, use_container_width=True, hide_index=True)
 
                 # Экспорт с уникальными ключами
                 st.subheader("📤 Экспорт")

@@ -96,6 +96,7 @@ class Hypothesis(BaseModel):
     critic_verdict: Optional[str] = None
     status: HypothesisStatus = HypothesisStatus.NEW
     roadmap: list[RoadmapStep] = Field(default_factory=list)
+    comment: Optional[str] = None  # свободный комментарий эксперта (HITL) — используется при regenerate
 
 
 class PipelineStatus(BaseModel):
