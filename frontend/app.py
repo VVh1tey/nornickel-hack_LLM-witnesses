@@ -397,65 +397,14 @@ class LLMsWitnessUi:
                     if 'created_at' in session:
                         st.metric("📅 Создана", session.get('created_at')[:16] if session.get('created_at') else 'N/A')
 
-                # Отображаем гипотезы если есть
-                hypotheses = session.get('hypotheses', [])
-                if hypotheses:
-                    st.subheader(f"💡 Гипотезы ({len(hypotheses)})")
-
-                    for i, hyp in enumerate(hypotheses, 1):
-                        with st.container():
-                            col1, col2, col3 = st.columns([5, 1, 1])
-                            hyp_id = hyp.get('id', f"hyp_{i}")
-                            unique_key = f"{session_id}_{hyp_id}_{i}"
-
-                            with col1:
-                                st.markdown(f"**{i}.** {hyp.get('statement', 'Нет текста')}")
-                                if hyp.get('score'):
-                                    st.caption(f"Оценка: {hyp.get('score'):.2f}")
-                                if hyp.get('status'):
-                                    status_color = "green" if hyp.get('status') == "approved" else "red" if hyp.get('status') == "rejected" else "orange"
-                                    st.markdown(f"Статус: **<span style='color:{status_color}'>{hyp.get('status')}</span>**", unsafe_allow_html=True)
-
-                            with col2:
-                                if hyp.get('status') not in ['approved', 'rejected']:
-                                    if st.button(
-                                        "👍 Принять",
-                                        key=f"approve_{unique_key}",
-                                        help="Отметить гипотезу как одобренную экспертом",
-                                    ):
-                                        self.send_feedback(session_id, hyp_id, "approve", unique_key)
-
-                            with col3:
-                                if hyp.get('status') not in ['approved', 'rejected']:
-                                    if st.button(
-                                        "👎 Отклонить",
-                                        key=f"reject_{unique_key}",
-                                        help="Отметить гипотезу как отклонённую экспертом",
-                                    ):
-                                        self.send_feedback(session_id, hyp_id, "reject", unique_key)
-
-                            with st.expander("💬 Комментарий эксперта и перегенерация"):
-                                st.caption(
-                                    "Не согласны с формулировкой? Опишите, что поправить — "
-                                    "LLM перепишет гипотезу с учётом комментария и заново "
-                                    "пересчитает проверки (ограничения/дубликаты/физика) и оценки."
-                                )
-                                comment_val = st.text_area(
-                                    'Комментарий',
-                                    value=hyp.get('comment') or '',
-                                    key=f"comment_{unique_key}",
-                                    placeholder="Например: учесть, что гидроциклоны уже заменены в прошлом году, предложи что-то другое",
-                                    height=80,
-                                    label_visibility="collapsed",
-                                )
-                                if st.button(
-                                    "🔄 Перегенерировать с учётом комментария",
-                                    key=f"regen_{unique_key}",
-                                    help="Переписать эту гипотезу заново (LLM), с учётом комментария выше — id и место в списке сохранятся",
-                                ):
-                                    self.send_regenerate(session_id, hyp_id, comment_val)
-
-                            st.divider()
+                # Список сессий приходит "облегчённым" (GET /api/sessions) —
+                # без самих гипотез, только их количество (n_hypotheses).
+                # Полные гипотезы (с approve/reject/комментарием) — только у
+                # АКТИВНОЙ сессии, см. render_hypotheses_list() ниже, после
+                # "Сделать активной" (там честный GET /api/sessions/{id}).
+                n_hyp = session.get('n_hypotheses', 0)
+                if n_hyp:
+                    st.caption(f"💡 Гипотез: {n_hyp} — нажмите «Сделать активной», чтобы посмотреть и оставить фидбэк")
                 else:
                     st.info("💭 Гипотез пока нет")
 
@@ -465,10 +414,10 @@ class LLMsWitnessUi:
                     if st.button(
                         "📥 Сделать активной",
                         key=f"load_{session_id}",
-                        help="Сделать эту сессию текущей — она появится во вкладках «Гипотезы» и «Аналитика»",
+                        help="Загрузить сессию целиком (с гипотезами) и сделать активной — появится ниже и во вкладке «Аналитика»",
                     ):
+                        self.get_session_data(session_id)  # полный GET, а не облегчённая запись из списка
                         self.state.session_id = session_id
-                        self.state.session_data = session
                         st.success(f"✅ Сессия {session_id[:8]}... сделана активной")
                         st.rerun()
 
@@ -496,6 +445,10 @@ class LLMsWitnessUi:
             with col3:
                 st.metric("Цель", data.get('goal', 'N/A')[:30] + "..." if len(data.get('goal', '')) > 30 else data.get('goal', 'N/A'))
 
+            hypotheses = data.get('hypotheses', [])
+            st.subheader(f"💡 Гипотезы ({len(hypotheses)})")
+            self.render_hypotheses_list(hypotheses, data.get('session_id', self.state.session_id), key_prefix="active_")
+
             # Экспорт с уникальными ключами
             st.subheader("📤 Экспорт")
             col1, col2, col3 = st.columns(3)
@@ -505,6 +458,71 @@ class LLMsWitnessUi:
                 self.export("json", "current_json")
             with col3:
                 self.export("docx", "current_docx")
+
+    def render_hypotheses_list(self, hypotheses: list, session_id: str, key_prefix: str = ""):
+        """Список гипотез с фидбэком (Принять/Отклонить) и комментарий+перегенерация.
+        Используется для АКТИВНОЙ сессии (self.state.session_data), куда данные
+        приходят полным GET /api/sessions/{id} — в отличие от облегчённого
+        списка сессий (GET /api/sessions), где гипотез нет вообще, только их
+        количество (n_hypotheses)."""
+        if not hypotheses:
+            st.info("💭 Гипотез пока нет")
+            return
+
+        for i, hyp in enumerate(hypotheses, 1):
+            with st.container():
+                col1, col2, col3 = st.columns([5, 1, 1])
+                hyp_id = hyp.get('id', f"hyp_{i}")
+                unique_key = f"{key_prefix}{session_id}_{hyp_id}_{i}"
+
+                with col1:
+                    st.markdown(f"**{i}.** {hyp.get('statement', 'Нет текста')}")
+                    if hyp.get('score'):
+                        st.caption(f"Оценка: {hyp.get('score'):.2f}")
+                    if hyp.get('status'):
+                        status_color = "green" if hyp.get('status') == "approved" else "red" if hyp.get('status') == "rejected" else "orange"
+                        st.markdown(f"Статус: **<span style='color:{status_color}'>{hyp.get('status')}</span>**", unsafe_allow_html=True)
+
+                with col2:
+                    if hyp.get('status') not in ['approved', 'rejected']:
+                        if st.button(
+                            "👍 Принять",
+                            key=f"approve_{unique_key}",
+                            help="Отметить гипотезу как одобренную экспертом",
+                        ):
+                            self.send_feedback(session_id, hyp_id, "approve", unique_key)
+
+                with col3:
+                    if hyp.get('status') not in ['approved', 'rejected']:
+                        if st.button(
+                            "👎 Отклонить",
+                            key=f"reject_{unique_key}",
+                            help="Отметить гипотезу как отклонённую экспертом",
+                        ):
+                            self.send_feedback(session_id, hyp_id, "reject", unique_key)
+
+                with st.expander("💬 Комментарий эксперта и перегенерация"):
+                    st.caption(
+                        "Не согласны с формулировкой? Опишите, что поправить — "
+                        "LLM перепишет гипотезу с учётом комментария и заново "
+                        "пересчитает проверки (ограничения/дубликаты/физика) и оценки."
+                    )
+                    comment_val = st.text_area(
+                        'Комментарий',
+                        value=hyp.get('comment') or '',
+                        key=f"comment_{unique_key}",
+                        placeholder="Например: учесть, что гидроциклоны уже заменены в прошлом году, предложи что-то другое",
+                        height=80,
+                        label_visibility="collapsed",
+                    )
+                    if st.button(
+                        "🔄 Перегенерировать с учётом комментария",
+                        key=f"regen_{unique_key}",
+                        help="Переписать эту гипотезу заново (LLM), с учётом комментария выше — id и место в списке сохранятся",
+                    ):
+                        self.send_regenerate(session_id, hyp_id, comment_val)
+
+                st.divider()
 
     def write_goal(self):
         """Отображение текущей цели"""

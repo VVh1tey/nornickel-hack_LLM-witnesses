@@ -135,6 +135,8 @@ async def list_sessions(limit: int = 20, offset: int = 0) -> list[dict]:
                 "name": data.get("name"),
                 "created_at": row["created_at"].isoformat(),
                 "goal": row["goal"],
+                "constraints": data.get("constraints", ""),
+                "weights": data.get("weights"),
                 "status": row["status"],
                 "n_hypotheses": len(data.get("hypotheses", [])),
             }
