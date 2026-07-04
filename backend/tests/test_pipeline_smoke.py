@@ -69,7 +69,10 @@ async def test_run_pipeline_smoke() -> None:
     ):
         if isinstance(event, list):
             final = event
-        else:
+        elif event.done:
+            # done=False — промежуточный прогресс изнутри узла (см. graph.py
+            # _progress()), их может быть сколько угодно; порядок узлов
+            # проверяем только по событиям завершения.
             statuses.append(event.node)
 
     assert statuses == EXPECTED_NODE_ORDER

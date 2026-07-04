@@ -971,9 +971,14 @@ class LLMsWitnessUi:
                 # Показываем прогресс если есть
                 progress = data.get('progress', [])
                 if progress:
-                    st.subheader("📈 Прогресс по узлам пайплайна")
-                    for item in progress:
-                        st.info(item)
+                    st.subheader("📈 Прогресс пайплайна")
+                    last = progress[-1]
+                    if data.get('status') == 'running':
+                        st.info(f"⏳ Сейчас: {last.get('message', '')}")
+                    with st.expander(f"Вся история ({len(progress)} событий)"):
+                        for item in progress:
+                            marker = "✅" if item.get('done') else "▫️"
+                            st.caption(f"{marker} {item.get('message', '')}")
 
                 # Аналитика по гипотезам: разбивка статусов + таблица оценок
                 hypotheses = data.get('hypotheses', [])
