@@ -28,6 +28,7 @@ from hypofactory import config
 from hypofactory.llm import embeddings
 from hypofactory.llm.client import get_client
 from hypofactory.llm.embeddings import aembed
+from hypofactory.llm.rerank import rerank as rerank_model_func
 
 ENTITY_TYPES = [
     "минерал",
@@ -86,6 +87,11 @@ async def get_lightrag() -> LightRAG:
         entity_extract_max_gleaning=0 if is_slow_local_llm else 1,
         default_llm_timeout=900 if is_slow_local_llm else 240,
         llm_model_max_async=config.LLM_MAX_CONCURRENCY,
+        # Qwen3-Reranker-0.6B через Ollama (llm/rerank.py) — маленькая
+        # отдельная модель, без неё LightRAG молча пропускал rerank с
+        # WARNING в логах (enable_rerank=True в QueryParam по умолчанию).
+        rerank_model_func=rerank_model_func,
+        min_rerank_score=0.3,
         addon_params={
             "language": "Русский",
             "entity_types": ENTITY_TYPES,
