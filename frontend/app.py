@@ -51,27 +51,27 @@ class LLMsWitnessUi:
         if self.state.hypotheses:
             sending_button = st.button('send to ai', use_container_width= True, type='primary')
             if sending_button:
-                for  hypo in enumerate(self.state.hypotheses):
+                for  hypo in self.state.hypotheses:
                     try:
                         response = requests.post(self.addr + '/v1/send_hypo/"', json={
                             'text': hypo
                         })
-                        if response.status_code == 200:
-                            self.state.messages.append({'code': response.status_code, 'text': hypo})
+                        self.state.messages.append({'code': response.status_code, 'text': hypo})
                     
                     except requests.ConnectionError:
                         st.error(f'Connection faild, check your server or config: {self.addr}')
-                        self.state.messages.append({'code': response, 'text': hypo})
+                        self.state.messages.append({'code': 400, 'text': hypo})
                 else:
-                    self.state.hypotheses = []
                     st.rerun()
                 
         if self.state.messages:
             for m in self.state.messages:
-                if m['code'] != 200:
-                    st.error(f"{m}")
-                else:
+                if m['code'] == 200:
                     st.success(f"{m}")
+                    i = self.state.hypotheses.index(m['text'])
+                    self.state.hypotheses.pop(i)
+                else:
+                    st.error(f"{m}")
             self.state.messages = []
 
     def write_hypotheses(self):
