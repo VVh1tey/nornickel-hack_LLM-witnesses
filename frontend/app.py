@@ -37,18 +37,16 @@ class LLMsWitnessUi:
     def readme(self):
         ...
 
-    def get_responses(self):
+    def get_responses(self, k: int):
         
         if st.button('fetch' if not self.state.responses else 'fetch next', type='primary'):
-            counter = 0
             try:
-                response = requests.get(self.addr + HANDLE_GET.replace('{session_id}',f'{counter}'))
+                response = requests.get(self.addr + HANDLE_GET.replace('{session_id}',f'{k}'))
                 if response.status_code == 200:
                     data = response.json()
                     self.state.responses.append(data)
-                    counter += 1
             except Exception as e:
-                st.error(f'Erroe: {e}')
+                st.error(f'Error: {e}')
 
     def send_data(self):
         if st.button('Send data', type='primary', width='stretch'):
@@ -68,6 +66,13 @@ class LLMsWitnessUi:
                     st.error('Please upload files and goal')
             except Exception as e:
                 st.error(f"Error: {e}")
+
+    def draw_responses(self):
+        if self.state.responses:
+            for r in self.state.responses:
+                st.table(r)
+        else:
+            st.text("🐭 nothing, use fetch")
 
     def write_goal(self):
         if self.state.goal:
@@ -118,8 +123,9 @@ class LLMsWitnessUi:
                 self.send_data()
         
         with tabs[1]:
-            st.table()
-            self.get_responses()
+            self.get_responses(len(self.state.responses))
+            self.draw_responses()
+
             
 
 if __name__ == "__main__":
