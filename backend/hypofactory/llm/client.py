@@ -27,7 +27,7 @@ import json
 import logging
 import re
 from pathlib import Path
-from typing import Any, Optional, TypeVar
+from typing import Any, Optional, TypeVar, Union
 
 import httpx
 from pydantic import BaseModel, ValidationError
@@ -390,14 +390,18 @@ class OllamaLLMClient:
         stop=stop_after_attempt(5),
         reraise=True,
     )
-    async def _chat_raw(self, messages: list[dict], *, json_mode: bool, temperature: float) -> str:
+    async def _chat_raw(
+        self, messages: list[dict], *, json_mode: Union[bool, dict] = False, temperature: float
+    ) -> str:
         payload: dict[str, Any] = {
             "model": config.OLLAMA_MODEL,
             "messages": messages,
             "stream": False,
-            "options": {"temperature": temperature},
+            "options": {"temperature": temperature, "num_predict": config.OLLAMA_NUM_PREDICT},
         }
-        if json_mode:
+        if isinstance(json_mode, dict):
+            payload["format"] = json_mode
+        elif json_mode:
             payload["format"] = "json"
 
         # Таймаут щедрый: маленькие модели на CPU (~10-15 ток/с) на длинных
@@ -409,7 +413,7 @@ class OllamaLLMClient:
                 data = response.json()
         return _strip_think_tags(data["message"]["content"])
 
-    async def _chat(self, messages: list[dict], *, json_mode: bool = False, temperature: float = 0.3) -> str:
+    async def _chat(self, messages: list[dict], *, json_mode: Union[bool, dict] = False, temperature: float = 0.3) -> str:
         cache_key = _cache_key(
             config.OLLAMA_MODEL, str(json_mode), str(temperature), json.dumps(messages, ensure_ascii=False)
         )
@@ -464,11 +468,6 @@ class OllamaLLMClient:
         system_prompt: Optional[str] = None,
         temperature: float = 0.1,
     ) -> T:
-        # Дамп полной JSON-схемы (properties/title/required/...) путает модели
-        # среднего размера: они начинают "эхом" повторять мета-структуру схемы
-        # вместо данных (проверено на qwen2.5:7b — с примером вместо схемы тот
-        # же промпт отработал верно). Пример-заготовка с фиктивными значениями
-        # интуитивнее для маленьких моделей, чем метаописание.
         example = _dummy_instance(schema).model_dump_json()
         json_system = (
             f"{system_prompt}\n\n" if system_prompt else ""
@@ -478,7 +477,8 @@ class OllamaLLMClient:
         )
         messages = self._messages(prompt, json_system, None)
 
-        raw = await self._chat(messages, json_mode=True, temperature=temperature)
+        json_schema = schema.model_json_schema()
+        raw = await self._chat(messages, json_mode=json_schema, temperature=temperature)
         try:
             return schema.model_validate_json(_strip_json_fences(raw))
         except (ValidationError, json.JSONDecodeError) as first_error:
@@ -492,7 +492,7 @@ class OllamaLLMClient:
                     ),
                 },
             ]
-            raw_repaired = await self._chat(repair_messages, json_mode=True, temperature=temperature)
+            raw_repaired = await self._chat(repair_messages, json_mode=json_schema, temperature=temperature)
             return schema.model_validate_json(_strip_json_fences(raw_repaired))
 
     async def adescribe_image(self, image_bytes: bytes, prompt: str, mime_type: str = "image/png") -> str:

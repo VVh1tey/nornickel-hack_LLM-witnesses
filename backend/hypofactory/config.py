@@ -37,6 +37,9 @@ OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen2.5:7b")
 # реранкер LightRAG (llm/rerank.py) — та же переменная качает docker-compose
 # сервис ollama-pull, чтобы модель в .env и то, что реально скачано, не разъезжались
 RERANK_MODEL = os.getenv("RERANK_MODEL", "dengcao/Qwen3-Reranker-0.6B:Q8_0")
+# потолок длины ответа Ollama в токенах — защита от срыва модели в
+# галлюцинацию вместо короткого JSON (см. llm/client.py._chat_raw)
+OLLAMA_NUM_PREDICT = int(os.getenv("OLLAMA_NUM_PREDICT", "4096"))
 
 LLM_CACHE_DIR = DATA_DIR / "llm_cache"
 
