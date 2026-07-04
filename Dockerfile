@@ -2,6 +2,12 @@ FROM python:3.11-slim
 
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
 
+# DejaVu Sans — Unicode-шрифт (кириллица) для PDF-экспорта (fpdf2 не умеет
+# кириллицу через встроенные core-шрифты); стандартный debian-пакет, не тащим
+# бинарник шрифта в git (см. export/pdf_report.py: путь ниже фиксированный).
+RUN apt-get update && apt-get install -y --no-install-recommends fonts-dejavu-core \
+    && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app/backend
 
 # зависимости отдельным слоем — кэшируется, пока backend/pyproject.toml и

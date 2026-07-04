@@ -7,7 +7,7 @@
     POST /api/sessions/{id}/hypotheses/{hid}/feedback         -> HITL approve/reject/skip (+ опц. comment)
     POST /api/sessions/{id}/hypotheses/{hid}/regenerate       -> переписать гипотезу с учётом comment (LLM) + заново verify/rank/roadmap
     POST /api/sessions/{id}/rerank                            -> пересортировка по новым весам (без LLM)
-    GET  /api/sessions/{id}/export?format=csv|json|docx      -> файл
+    GET  /api/sessions/{id}/export?format=csv|json|docx|pdf  -> файл
     GET  /api/sessions/{id}/hypotheses/{hid}/graph            -> HTML подграфа
     POST /api/admin/rejected-index/rebuild                    -> форс. пересборка эмбеддинг-кэша отклонённых (обычно не нужна вручную)
 
@@ -28,6 +28,7 @@ from hypofactory import config
 from hypofactory.api.store import SessionState, list_sessions, load_session, save_session
 from hypofactory.export.csv_json import export_csv, export_json
 from hypofactory.export.docx_report import export_docx
+from hypofactory.export.pdf_report import export_pdf
 from hypofactory.pipeline.feedback_learning import add_approved_hypothesis, load_approved_pool
 from hypofactory.pipeline.generator import _load_hypotheses_db, revise_hypothesis
 from hypofactory.pipeline.rejected_filter import add_rejected_hypothesis, rebuild_rejected_index
@@ -245,7 +246,7 @@ async def rerank_session(session_id: str, weights: RankingWeights):
 
 
 @app.get("/api/sessions/{session_id}/export")
-async def export_session(session_id: str, format: Literal["csv", "json", "docx"] = "csv"):
+async def export_session(session_id: str, format: Literal["csv", "json", "docx", "pdf"] = "csv"):
     session = await load_session(session_id)
     if session is None:
         raise HTTPException(404, "сессия не найдена")
@@ -256,6 +257,9 @@ async def export_session(session_id: str, format: Literal["csv", "json", "docx"]
     elif format == "json":
         path = export_json(session_id, session.hypotheses)
         media_type = "application/json"
+    elif format == "pdf":
+        path = export_pdf(session_id, session.goal, session.hypotheses)
+        media_type = "application/pdf"
     else:
         path = export_docx(session_id, session.goal, session.hypotheses)
         media_type = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"

@@ -40,6 +40,7 @@ dependencies = [
     # pyvis/networkx нужны бэку для генерации HTML-графа гипотезы)
     "pyvis",
     "networkx",
+    "fpdf2>=2.8.7",
 ]
 
 [dependency-groups]

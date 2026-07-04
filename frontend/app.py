@@ -99,6 +99,7 @@ class LLMsWitnessUi:
                 "csv": "text/csv",
                 "json": "application/json",
                 "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                "pdf": "application/pdf",
             }
             st.download_button(
                 f'💾 Скачать {format.upper()}',
@@ -455,13 +456,15 @@ class LLMsWitnessUi:
 
             # Экспорт с уникальными ключами
             st.subheader("📤 Экспорт")
-            col1, col2, col3 = st.columns(3)
+            col1, col2, col3, col4 = st.columns(4)
             with col1:
                 self.export("csv", "current_csv")
             with col2:
                 self.export("json", "current_json")
             with col3:
                 self.export("docx", "current_docx")
+            with col4:
+                self.export("pdf", "current_pdf")
 
     def render_hypotheses_list(self, hypotheses: list, session_id: str, key_prefix: str = ""):
         """Список гипотез с фидбэком (Принять/Отклонить) и комментарий+перегенерация.
@@ -890,13 +893,15 @@ class LLMsWitnessUi:
 
                 # Экспорт с уникальными ключами
                 st.subheader("📤 Экспорт")
-                col1, col2, col3 = st.columns(3)
+                col1, col2, col3, col4 = st.columns(4)
                 with col1:
                     self.export("csv", "analytics_csv")
                 with col2:
                     self.export("json", "analytics_json")
                 with col3:
                     self.export("docx", "analytics_docx")
+                with col4:
+                    self.export("pdf", "analytics_pdf")
             else:
                 st.info("💡 Данные сессии не загружены. Сначала запустите генерацию или загрузите сессию во вкладке «Гипотезы».")
 

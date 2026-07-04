@@ -188,7 +188,7 @@ Postgres — либо просто `docker compose up -d ollama qdrant postgres`
   (новизна/реализуемость/эффект/риск/score/статус) по каждой гипотезе — то, чего
   не видно в списке во вкладке «Гипотезы». Плюс кнопки экспорта.
 
-**Экспорт в CSV / JSON / DOCX** — после нажатия появляется отдельная кнопка
+**Экспорт в CSV / JSON / DOCX / PDF** — после нажатия появляется отдельная кнопка
 **💾 Скачать** с реальным файлом (сохранённые байты ответа API, а не
 предпросмотр на странице).
 
@@ -207,6 +207,7 @@ Postgres — либо просто `docker compose up -d ollama qdrant postgres`
 | `POSTGRES_DSN` | строка подключения к Postgres (история сессий) |
 | `LLM_MAX_CONCURRENCY` | лимит параллельных вызовов LLM и эмбеддингов |
 | `DOMAIN_PROFILE` | предметная область (по умолчанию `obogashchenie`) — см. [«Адаптация под другие домены»](#адаптация-под-другие-домены) |
+| `PDF_FONT_PATH` | путь к Unicode TTF-шрифту (кириллица) для PDF-экспорта, если не найден автоматически (Docker — `fonts-dejavu-core`, Windows/macOS — системный Arial) |
 | `HYPOFACTORY_FAKE_LLM=1` | форсировать `FakeLLM`/фейковые эмбеддинги независимо от провайдера (тесты, отладка без сети вообще) |
 | `LANGFUSE_HOST`, `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY` | трейс вызовов LLM (self-hosted Langfuse, см. ниже) |
 | `LANGFUSE_SALT`, `LANGFUSE_ENCRYPTION_KEY`, `LANGFUSE_NEXTAUTH_SECRET`, `LANGFUSE_PG_PASSWORD`, `LANGFUSE_CLICKHOUSE_PASSWORD`, `LANGFUSE_MINIO_PASSWORD`, `LANGFUSE_REDIS_AUTH` | секреты self-hosted Langfuse-стека (сгенерировать: `openssl rand -hex 16` / `32` / `12`, см. `.env.example`) |
@@ -226,7 +227,7 @@ Postgres — либо просто `docker compose up -d ollama qdrant postgres`
 | POST | `/api/sessions/{id}/hypotheses/{hid}/feedback` | HITL: `{"action": "approve"\|"reject"\|"skip", "comment": "..."}` (`comment` необязателен) |
 | POST | `/api/sessions/{id}/hypotheses/{hid}/regenerate` | переписать гипотезу с учётом `{"comment": "..."}` (LLM) и заново прогнать verify/rank/roadmap |
 | POST | `/api/sessions/{id}/rerank` | пересортировка по новым весам критериев без вызова LLM |
-| GET | `/api/sessions/{id}/export?format=csv\|json\|docx` | выгрузка гипотез |
+| GET | `/api/sessions/{id}/export?format=csv\|json\|docx\|pdf` | выгрузка гипотез |
 | GET | `/api/sessions/{id}/hypotheses/{hid}/graph` | HTML-граф сущностей/связей вокруг гипотезы |
 | GET | `/api/debug/graph` | HTML всего графа знаний целиком (у LightRAG в этой интеграции нет своего дашборда) |
 | GET | `/api/debug/graph/stats` | JSON: сколько узлов/рёбер в графе |
