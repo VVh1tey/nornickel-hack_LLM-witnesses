@@ -8,9 +8,9 @@ from typing import Any, AsyncIterator, Optional, TypedDict, Union
 
 from langgraph.graph import END, START, StateGraph
 
-from hypofactory import tracing
-from hypofactory.analysis.tails_analyzer import analyze as analyze_tails
-from hypofactory.ingestion.excel_tails import parse_loss_table
+from hypofactory import config, tracing
+from hypofactory.analysis.registry import get_analyzer
+from hypofactory.domain_profile import get_profile
 from hypofactory.pipeline.feedback_learning import load_approved_pool
 from hypofactory.pipeline.generator import _load_hypotheses_db, generate_hypotheses
 from hypofactory.pipeline.query_builder import build_queries
@@ -51,8 +51,11 @@ class PipelineState(TypedDict, total=False):
 
 
 async def _node_analyzer(state: PipelineState) -> dict[str, Any]:
-    parsed = parse_loss_table(state["excel_path"])
-    return {"findings": analyze_tails(parsed)}
+    # Домен (config.DOMAIN_PROFILE) выбирает анализатор через реестр — новый
+    # домен подключается профилем + новым анализатором, без правок графа.
+    profile = get_profile(config.DOMAIN_PROFILE)
+    analyzer_fn = get_analyzer(profile.analyzer)
+    return {"findings": analyzer_fn(state["excel_path"])}
 
 
 async def _node_target_spec(state: PipelineState) -> dict[str, Any]:

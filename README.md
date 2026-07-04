@@ -206,6 +206,7 @@ Postgres — либо просто `docker compose up -d ollama qdrant postgres`
 | `QDRANT_URL` | адрес Qdrant (векторный индекс LightRAG) |
 | `POSTGRES_DSN` | строка подключения к Postgres (история сессий) |
 | `LLM_MAX_CONCURRENCY` | лимит параллельных вызовов LLM и эмбеддингов |
+| `DOMAIN_PROFILE` | предметная область (по умолчанию `obogashchenie`) — см. [«Адаптация под другие домены»](#адаптация-под-другие-домены) |
 | `HYPOFACTORY_FAKE_LLM=1` | форсировать `FakeLLM`/фейковые эмбеддинги независимо от провайдера (тесты, отладка без сети вообще) |
 | `LANGFUSE_HOST`, `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY` | трейс вызовов LLM (self-hosted Langfuse, см. ниже) |
 | `LANGFUSE_SALT`, `LANGFUSE_ENCRYPTION_KEY`, `LANGFUSE_NEXTAUTH_SECRET`, `LANGFUSE_PG_PASSWORD`, `LANGFUSE_CLICKHOUSE_PASSWORD`, `LANGFUSE_MINIO_PASSWORD`, `LANGFUSE_REDIS_AUTH` | секреты self-hosted Langfuse-стека (сгенерировать: `openssl rand -hex 16` / `32` / `12`, см. `.env.example`) |
@@ -286,6 +287,30 @@ cd backend && uv run python eval/run_eval.py
   curl http://localhost:8000/api/debug/graph -o graph.html
   start graph.html   # PowerShell/cmd; на Linux/macOS — open/xdg-open graph.html
   ```
+
+## Адаптация под другие домены
+
+`DOMAIN_PROFILE` (см. `backend/hypofactory/domain_profile.py`) параметризует
+LLM-часть пайплайна:
+- `expert_role` — формулировка "ты эксперт по..." во всех системных промптах
+  (generator/verification/ranker/roadmap/target_spec)
+- `entity_types` — типы сущностей для LightRAG-экстракции графа знаний
+- `spheres` — ключевые слова для группировки few-shot по технологическим
+  направлениям (не даёт модели копировать пропорции тем в примерах)
+
+Новый домен — новая запись в `DOMAIN_PROFILES` + новый анализатор в
+`backend/hypofactory/analysis/registry.py` (интерфейс `analyze(file_path) ->
+list[LossFinding]`), без правок графа пайплайна и остальных узлов.
+
+**Честно про границы этого решения**: анализатор входных данных
+(`analysis/tails_analyzer.py`) — детерминированные pandas-правила под
+конкретную Excel-схему («класс крупности × минеральная форма × элемент»).
+Это НЕЛЬЗЯ сделать конфигом без потери смысла — для другого домена нужен
+СВОЙ анализатор с другой входной схемой данных (это и есть точка расширения
+через registry, а не то, что решается одним профилем). Vision-OCR промпты
+(`ingestion/vision_ocr.py`) тоже глубоко предметны (конкретное оборудование
+обогащения прямо в теле промпта, не только во вступлении) — не параметризованы,
+для нового домена потребуют отдельного промпта.
 
 ## Известные ограничения
 

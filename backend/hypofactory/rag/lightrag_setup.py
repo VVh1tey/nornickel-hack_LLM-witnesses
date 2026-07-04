@@ -25,21 +25,11 @@ from lightrag.kg.shared_storage import initialize_pipeline_status
 from lightrag.utils import EmbeddingFunc
 
 from hypofactory import config
+from hypofactory.domain_profile import get_profile
 from hypofactory.llm import embeddings
 from hypofactory.llm.client import get_client
 from hypofactory.llm.embeddings import aembed
 from hypofactory.llm.rerank import rerank as rerank_model_func
-
-ENTITY_TYPES = [
-    "минерал",
-    "металл",
-    "реагент",
-    "оборудование",
-    "технологическая_операция",
-    "параметр_режима",
-    "показатель",
-    "класс_крупности",
-]
 
 _rag_instance: Optional[LightRAG] = None
 
@@ -94,7 +84,7 @@ async def get_lightrag() -> LightRAG:
         min_rerank_score=0.3,
         addon_params={
             "language": "Русский",
-            "entity_types": ENTITY_TYPES,
+            "entity_types": get_profile(config.DOMAIN_PROFILE).entity_types,
         },
     )
     await rag.initialize_storages()

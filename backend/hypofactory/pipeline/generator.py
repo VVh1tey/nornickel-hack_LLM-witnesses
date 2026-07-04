@@ -16,6 +16,7 @@ import uuid
 from pydantic import BaseModel, Field
 
 from hypofactory import config
+from hypofactory.domain_profile import get_profile
 from hypofactory.llm.client import get_client
 from hypofactory.llm.embeddings import aembed, cached_embed_texts, cosine_similarity
 from hypofactory.pipeline.feedback_learning import load_approved_pool
@@ -24,8 +25,9 @@ from hypofactory.schemas import Hypothesis, LossFinding, RetrievalResult, Source
 FEWSHOT_TOP_K = 15
 FEWSHOT_CACHE_PATH = config.PROCESSED_DIR / "fewshot_embeddings_cache.npz"
 
-GENERATOR_SYSTEM_PROMPT = """Ты — эксперт-исследователь в области обогащения полезных ископаемых \
-(флотация, измельчение, классификация, реагентный режим).
+_PROFILE = get_profile(config.DOMAIN_PROFILE)
+
+GENERATOR_SYSTEM_PROMPT = f"""Ты — {_PROFILE.expert_role}.
 
 На основе целевой задачи, находок анализа потерь металлов в хвостах, контекста из научной \
 литературы/регламентов и примеров РЕАЛЬНЫХ гипотез, которые предлагали эксперты на других \
@@ -96,23 +98,15 @@ def _format_context(retrieval: RetrievalResult) -> str:
     return "\n\n".join(f"[Источник: {c.source_file}]\n{c.content[:500]}" for c in retrieval.chunks[:10])
 
 
-# Порядок и ключевые слова для группировки few-shot по сферам (см. docstring
-# _format_few_shot: без этого модель неявно копирует пропорции тем в примерах).
-_SPHERES: list[tuple[str, tuple[str, ...]]] = [
-    ("Классификация/грохочение/гидроциклоны", ("классифика", "гидроциклон", "грохот", "сит", "насад")),
-    ("Измельчение/дробление", ("мельниц", "футеровк", "дробилк", "измельч", "шар", "гал")),
-    ("Флотация/реагентный режим", ("флотаци", "реагент", "пульп", "чан", "агитаци")),
-    ("Автоматизация/контроль параметров", ("автоматиза", "контрол", "регулирован", "гранулометри")),
-]
-_OTHER_SPHERE = "Прочее"
-
-
 def _classify_sphere(text: str) -> str:
+    """Ключевые слова сфер — из профиля домена (domain_profile.py), не
+    захардкожены здесь: без этого модель неявно копирует пропорции тем в
+    примерах вместо разнообразия (см. docstring _format_few_shot)."""
     lower = text.lower()
-    for sphere, keywords in _SPHERES:
+    for sphere, keywords in _PROFILE.spheres:
         if any(kw in lower for kw in keywords):
             return sphere
-    return _OTHER_SPHERE
+    return _PROFILE.other_sphere
 
 
 def _load_hypotheses_db() -> dict[str, list[str]]:
@@ -166,7 +160,7 @@ def _format_few_shot(entries: list[dict]) -> str:
     for e in entries:
         by_sphere.setdefault(_classify_sphere(e["statement"]), []).append(f"{e['statement']} ({e['source']})")
 
-    order = [sphere for sphere, _ in _SPHERES] + [_OTHER_SPHERE]
+    order = [sphere for sphere, _ in _PROFILE.spheres] + [_PROFILE.other_sphere]
     blocks = []
     for sphere in order:
         items = by_sphere.get(sphere)
@@ -219,7 +213,7 @@ KPI: {spec.kpi or "не указан явно"}
 
 
 REVISE_SYSTEM_PROMPT = (
-    "Ты — эксперт-исследователь в области обогащения полезных ископаемых. "
+    f"Ты — {_PROFILE.expert_role}. "
     "Тебе дают гипотезу и комментарий эксперта-практика с производства — "
     "перепиши гипотезу с учётом этого комментария, сохраняя тот же формат "
     "(конкретное техническое изменение + механизм + ожидаемый эффект). "

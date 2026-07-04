@@ -9,12 +9,16 @@ from __future__ import annotations
 
 from pydantic import BaseModel
 
+from hypofactory import config
+from hypofactory.domain_profile import get_profile
 from hypofactory.llm.client import get_client
 from hypofactory.schemas import Hypothesis, RankingWeights
 
+_PROFILE = get_profile(config.DOMAIN_PROFILE)
+
 RUBRIC_SYSTEM_PROMPT = (
-    "Ты эксперт-судья, оценивающий исследовательские гипотезы по обогащению руд "
-    "цветных металлов. Оценивай строго и дифференцированно, избегай одинаковых "
+    f"Ты эксперт-судья, {_PROFILE.expert_role}, оценивающий исследовательские "
+    "гипотезы. Оценивай строго и дифференцированно, избегай одинаковых "
     "оценок по всем критериям."
 )
 

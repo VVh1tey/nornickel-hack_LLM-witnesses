@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+from hypofactory import config
+from hypofactory.domain_profile import get_profile
 from hypofactory.llm.client import get_client
 from hypofactory.schemas import TargetSpec
 
+_PROFILE = get_profile(config.DOMAIN_PROFILE)
+
 SYSTEM_PROMPT = (
-    "Ты помощник по формулировке исследовательских задач в обогащении полезных "
-    "ископаемых (флотация, измельчение, классификация руд цветных металлов). "
+    f"Ты помощник по формулировке исследовательских задач для {_PROFILE.expert_role}. "
     "Извлеки из запроса пользователя: цель (goal), ключевой KPI, если он назван "
     "явно или подразумевается (kpi), список ограничений (constraints) и "
     "упомянутое оборудование (equipment). Отвечай только на русском языке. "

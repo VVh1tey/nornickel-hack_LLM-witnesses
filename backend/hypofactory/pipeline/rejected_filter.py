@@ -19,9 +19,12 @@ from datetime import datetime, timezone
 from pydantic import BaseModel
 
 from hypofactory import config
+from hypofactory.domain_profile import get_profile
 from hypofactory.llm.client import get_client
 from hypofactory.llm.embeddings import aembed, cached_embed_texts, cosine_similarity
 from hypofactory.schemas import Hypothesis
+
+_PROFILE = get_profile(config.DOMAIN_PROFILE)
 
 REJECTED_POOL_PATH = config.PROCESSED_DIR / "rejected_hypotheses.json"
 REJECTED_CACHE_PATH = config.PROCESSED_DIR / "rejected_embeddings_cache.npz"
@@ -104,8 +107,8 @@ async def filter_against_rejected(hypotheses: list[Hypothesis]) -> list[Hypothes
 нет в отклонённой формулировке), или это разные идеи?""",
             RejectSimilarityVerdict,
             system_prompt=(
-                "Ты сравниваешь исследовательские гипотезы обогащения руд на предмет "
-                "совпадения сути идеи с ранее отклонённой экспертом гипотезой. "
+                f"Ты — {_PROFILE.expert_role}, сравниваешь исследовательские гипотезы "
+                "на предмет совпадения сути идеи с ранее отклонённой экспертом гипотезой. "
                 "Отвечай только на русском языке."
             ),
         )

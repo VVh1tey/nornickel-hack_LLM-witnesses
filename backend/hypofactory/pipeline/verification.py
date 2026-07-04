@@ -7,12 +7,16 @@ from dataclasses import dataclass
 import numpy as np
 from pydantic import BaseModel
 
+from hypofactory import config
+from hypofactory.domain_profile import get_profile
 from hypofactory.llm.client import get_client
 from hypofactory.llm.embeddings import aembed, cosine_similarity
 from hypofactory.schemas import Hypothesis, TargetSpec
 
 # Ниже этого даже не спрашиваем LLM — темы точно разные, экономим вызов.
 ALREADY_TRIED_CANDIDATE_THRESHOLD = 0.35
+
+_PROFILE = get_profile(config.DOMAIN_PROFILE)
 
 
 class ConstraintVerdict(BaseModel):
@@ -78,8 +82,8 @@ async def check_already_tried(hyp: Hypothesis, index: KnownHypothesesIndex) -> s
 формулировке), или это разные идеи?""",
         AlreadyTriedVerdict,
         system_prompt=(
-            "Ты сравниваешь исследовательские гипотезы обогащения руд на предмет "
-            "дублирования сути идеи, а не дословного совпадения текста. "
+            f"Ты — {_PROFILE.expert_role}, сравниваешь исследовательские гипотезы "
+            "на предмет дублирования сути идеи, а не дословного совпадения текста. "
             "Отвечай только на русском языке."
         ),
     )
@@ -100,8 +104,8 @@ async def check_constraints(hyp: Hypothesis, spec: TargetSpec) -> tuple[bool, st
         prompt,
         ConstraintVerdict,
         system_prompt=(
-            "Ты проверяешь техническую реализуемость гипотез обогащения руд "
-            "относительно заданных ограничений. Отвечай только на русском языке."
+            f"Ты — {_PROFILE.expert_role}, проверяешь техническую реализуемость "
+            "гипотез относительно заданных ограничений. Отвечай только на русском языке."
         ),
     )
     return verdict.ok, verdict.reason
@@ -115,14 +119,11 @@ async def check_physics(hyp: Hypothesis, context_chunks: list[str]) -> str:
 Контекст из литературы:
 {context}
 
-Правдоподобен ли описанный механизм с точки зрения физики/химии процесса обогащения? Кратко обоснуй."""
+Правдоподобен ли описанный механизм с точки зрения физики/химии процесса? Кратко обоснуй."""
     verdict = await client.acomplete_json(
         prompt,
         PhysicsVerdict,
-        system_prompt=(
-            "Ты научный критик, специалист по обогащению полезных ископаемых. "
-            "Отвечай только на русском языке."
-        ),
+        system_prompt=f"Ты научный критик, {_PROFILE.expert_role}. Отвечай только на русском языке.",
     )
     verdict_label = "ПРАВДОПОДОБНО" if verdict.plausible else "СОМНИТЕЛЬНО"
     return f"{verdict_label}: {verdict.reason}"

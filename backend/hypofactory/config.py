@@ -67,6 +67,11 @@ LLM_MAX_CONCURRENCY = int(os.getenv("LLM_MAX_CONCURRENCY", "4"))
 CHUNK_TOKEN_SIZE = 1100
 CHUNK_OVERLAP = 150
 
+# Предметная область (см. domain_profile.py) — параметризует entity_types для
+# LightRAG и формулировку "ты эксперт по..." в промптах generator/verification/
+# ranker/roadmap. Новый домен подключается профилем там же, без правок кода.
+DOMAIN_PROFILE = os.getenv("DOMAIN_PROFILE", "obogashchenie")
+
 # Langfuse (self-hosted, docker-compose.yml) — трейс вызовов LLM, см. tracing.py.
 # SDK (langfuse.get_client()) сам читает эти переменные из os.environ — здесь
 # только для наглядности/дефолта, как с QDRANT_URL выше.
