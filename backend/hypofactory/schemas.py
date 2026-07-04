@@ -1,26 +1,30 @@
 """Общие контракты данных между всеми модулями. Меняем только по договорённости всей команды."""
 
+import uuid
+from datetime import datetime
 from enum import Enum
-from typing import Iterator, Optional
+from typing import Any, Literal, Optional, Union
 
 from pydantic import BaseModel, Field
 
 
-class DocType(str, Enum):
-    TEXTBOOK = "textbook"
-    SCHEME_OCR = "scheme_ocr"
-    REGULATION_OCR = "regulation_ocr"
-    HYPOTHESES_DOC = "hypotheses_doc"
+class DocumentChunk(BaseModel):
+    """Единый формат чанка документа для всей системы.
 
+    Пришёл из ingestion-черновика сокомандника (Норникель/schemas/chunk.py) — принят
+    как канонический контракт вместо более узкого Chunk. P1 кладёт чанки в
+    corpus.jsonl, P2 индексирует их в LightRAG (file_paths=source_file при ainsert).
+    """
 
-class Chunk(BaseModel):
-    """Единица корпуса. P1 кладёт в corpus.jsonl, P2 индексирует в LightRAG."""
-
-    id: str
-    text: str
-    source: str  # имя файла-источника
-    page: Optional[int] = None
-    doc_type: DocType
+    chunk_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    source_file: str = Field(..., description="Имя исходного файла")
+    doc_type: Literal[
+        "textbook_pdf", "tailings_excel", "diagram_image", "regulation_pdf", "hypotheses_docx"
+    ]
+    page_or_sheet: Union[int, str] = Field(..., description="Номер страницы или имя листа Excel")
+    content: str = Field(..., description="Текстовое содержание чанка")
+    metadata: dict[str, Any] = Field(default_factory=dict, description="Метаданные: авторы, год, параметры и т.д.")
+    created_at: datetime = Field(default_factory=datetime.now)
 
 
 class LossFinding(BaseModel):
@@ -45,9 +49,9 @@ class TargetSpec(BaseModel):
 
 
 class RetrievalResult(BaseModel):
-    """Ответ retrieve() из LightRAG: контекст + графовые сущности."""
+    """Ответ retrieve() из LightRAG: контекст + графовые сущности/связи с цитированием."""
 
-    chunks: list[Chunk]
+    chunks: list[DocumentChunk]
     entities: list[str] = Field(default_factory=list)
     relations: list[str] = Field(default_factory=list)  # "A -[влияет на]-> B"
 
@@ -95,12 +99,33 @@ class Hypothesis(BaseModel):
 
 
 class PipelineStatus(BaseModel):
-    """Событие прогресса для UI (P4)."""
+    """Событие прогресса пайплайна (для API/UI)."""
 
     node: str  # "analyzer" / "retrieval" / "generator" / ...
     message: str
     done: bool = False
 
 
-# Контракт P3 -> P4:
+class EquipmentItem(BaseModel):
+    """Единица оборудования, извлечённая из регламента/списка оборудования (vision-OCR)."""
+
+    name: str
+    type: Optional[str] = None
+    parameters: Optional[str] = None
+
+
+class EquipmentList(BaseModel):
+    items: list[EquipmentItem] = Field(default_factory=list)
+
+
+class RankingWeights(BaseModel):
+    """Веса критериев ранжирования, задаваемые пользователем (режим экспертной настройки)."""
+
+    novelty: float = 1.0
+    feasibility: float = 1.0
+    impact: float = 1.0
+    risk: float = 1.0
+
+
+# Контракт пайплайна (backend/hypofactory/pipeline/graph.py):
 # def run_pipeline(excel_path, goal, constraints, weights) -> Iterator[PipelineStatus | list[Hypothesis]]

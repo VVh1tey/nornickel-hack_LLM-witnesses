@@ -221,10 +221,15 @@ __marimo__/
 data/raw/*
 data/processed/*
 data/lightrag/*
+data/sessions/*
+data/llm_cache/*
 !data/**/.gitkeep
 
-# кэши eval
+# кэши eval / разовые отчёты и демо-выгрузки (пересобираются скриптами)
 .deepeval/
+backend/eval/last_report.json
+backend/eval/last_report.html
+/*.html
 
 # рабочие файлы планирования
 .claude/

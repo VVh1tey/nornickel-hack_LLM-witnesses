@@ -17,18 +17,60 @@ CORPUS_PATH = PROCESSED_DIR / "corpus.jsonl"
 HYPOTHESES_DB_PATH = PROCESSED_DIR / "hypotheses_db.json"
 EQUIPMENT_PATH = PROCESSED_DIR / "equipment.json"
 
+# LLM — два провайдера на выбор (см. llm/client.py):
+#   "ollama" — маленький Qwen локально в контейнере (по умолчанию, для отладки
+#              без ключей/квот/прав Yandex), OpenAI-совместимый /api/chat.
+#   "yandex" — YandexGPT через yandex-ai-studio-sdk (нужны YC_FOLDER_ID/YC_API_KEY).
+LLM_PROVIDER = os.getenv("LLM_PROVIDER", "ollama")
+
 # Yandex AI Studio SDK (пакет yandex-ai-studio-sdk)
 YC_FOLDER_ID = os.getenv("YC_FOLDER_ID", "")
 YC_API_KEY = os.getenv("YC_API_KEY", "")
 # модель для генерации/экстракции: pro, не lite — качество экстракции определяет граф
 YC_MODEL = os.getenv("YC_MODEL", "yandexgpt")
+# на момент написания только эта модель в AI Studio понимает картинки (sdk.chat.completions)
+YC_VISION_MODEL = os.getenv("YC_VISION_MODEL", "gemma-3-27b-it")
 
-# Эмбеддинги — локальные (bge-m3), НЕ Яндекс (256 dim + жёсткие квоты)
-EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "BAAI/bge-m3")
-EMBEDDING_DIM = 1024
+# Ollama (локальный маленький Qwen, сервис в docker-compose.yml)
+OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
+OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen2.5:7b")
 
-# Лимиты под квоты Яндекса
+LLM_CACHE_DIR = DATA_DIR / "llm_cache"
+
+# Эмбеддинги — см. llm/embeddings.py. Два провайдера на выбор:
+#   "local"  — bge-m3 локально (по умолчанию: не зависит от прав/квот Yandex,
+#              надёжный вариант, пока не разобрались с PERMISSION_DENIED)
+#   "yandex" — text-embeddings-v2 (doc/query асимметрично). Короткие имена
+#              sdk.models.text_embeddings("doc"/"query") — это v1 (жёстко 256 dim);
+#              v2 даёт 128/256/512/768 — берём максимум.
+EMBEDDING_PROVIDER = os.getenv("EMBEDDING_PROVIDER", "local")
+EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "BAAI/bge-m3")  # только для EMBEDDING_PROVIDER=local
+
+if EMBEDDING_PROVIDER == "local":
+    EMBEDDING_DIM = 1024  # фиксированная размерность bge-m3, override .env тут бессмысленен
+else:
+    EMBEDDING_DIM = int(os.getenv("EMBEDDING_DIM", "768"))
+
+# Векторный индекс LightRAG: Qdrant (сервис в docker-compose.yml). LightRAG сам
+# читает QDRANT_URL/QDRANT_API_KEY из os.environ (см. lightrag/kg/qdrant_impl.py) —
+# load_dotenv() выше уже положил их туда, здесь только для наглядности/дефолта.
+QDRANT_URL = os.getenv("QDRANT_URL", "http://localhost:6333")
+os.environ.setdefault("QDRANT_URL", QDRANT_URL)
+
+# История сессий — Postgres (см. api/store.py). Без него сессии не сохранятся:
+# сервис специально не хранит их в JSON-фолбэке, поднимай docker-compose postgres.
+POSTGRES_DSN = os.getenv("POSTGRES_DSN", "postgresql://hypofactory:hypofactory@localhost:5432/hypofactory")
+
+# Лимиты конкурентности вызовов LLM/эмбеддингов
 LLM_MAX_CONCURRENCY = int(os.getenv("LLM_MAX_CONCURRENCY", "4"))
 
 CHUNK_TOKEN_SIZE = 1100
 CHUNK_OVERLAP = 150
+
+# Langfuse (self-hosted, docker-compose.yml) — трейс вызовов LLM, см. tracing.py.
+# SDK (langfuse.get_client()) сам читает эти переменные из os.environ — здесь
+# только для наглядности/дефолта, как с QDRANT_URL выше.
+LANGFUSE_HOST = os.getenv("LANGFUSE_HOST", "http://localhost:3000")
+LANGFUSE_PUBLIC_KEY = os.getenv("LANGFUSE_PUBLIC_KEY", "")
+LANGFUSE_SECRET_KEY = os.getenv("LANGFUSE_SECRET_KEY", "")
+os.environ.setdefault("LANGFUSE_HOST", LANGFUSE_HOST)

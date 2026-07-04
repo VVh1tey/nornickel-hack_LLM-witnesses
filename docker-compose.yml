@@ -1,12 +1,29 @@
 services:
-  app:
+  api:
     build: .
     ports:
-      - "8501:8501"
+      - "8000:8000"
     env_file: .env
+    environment:
+      - QDRANT_URL=http://qdrant:6333
+      - OLLAMA_BASE_URL=http://ollama:11434
+      - POSTGRES_DSN=postgresql://hypofactory:hypofactory@postgres:5432/hypofactory
+      - LANGFUSE_HOST=http://langfuse-web:3000
     volumes:
-      - ./data:/app/data                     # корпус, индексы LightRAG, кэши LLM переживают пересборку
+      - ./data:/app/data                     # корпус, индексы LightRAG (KV/граф — файлово), кэши LLM переживают пересборку
       - hf-cache:/root/.cache/huggingface    # веса bge-m3 не скачиваются заново
+    depends_on:
+      - qdrant
+      - postgres
+      - ollama
+    # GPU нужен, только если EMBEDDING_PROVIDER=local (bge-m3 через torch/CUDA)
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
 
   # разовая индексация корпуса в LightRAG (P2, запускать фоном):
   # docker compose run --rm indexer
@@ -14,10 +31,235 @@ services:
     build: .
     profiles: ["tools"]
     env_file: .env
+    environment:
+      - QDRANT_URL=http://qdrant:6333
+      - OLLAMA_BASE_URL=http://ollama:11434
+      - LANGFUSE_HOST=http://langfuse-web:3000
     volumes:
       - ./data:/app/data
       - hf-cache:/root/.cache/huggingface
     command: ["python", "backend/scripts/index_lightrag.py"]
+    depends_on:
+      - qdrant
+      - ollama
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+  # векторный индекс LightRAG (вместо файлового NanoVectorDBStorage)
+  # веб-дашборд из коробки: http://localhost:6333/dashboard
+  qdrant:
+    image: qdrant/qdrant:latest
+    ports:
+      - "6333:6333"
+    volumes:
+      - qdrant-data:/qdrant/storage
+
+  # история сессий (вместо JSON-файлов) — см. api/store.py
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      - POSTGRES_USER=hypofactory
+      - POSTGRES_PASSWORD=hypofactory
+      - POSTGRES_DB=hypofactory
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+
+  # локальный LLM для отладки пайплайна без ключей/квот Yandex (LLM_PROVIDER=ollama)
+  # GPU (NVIDIA, требует nvidia-container-toolkit — уже проверено, что работает)
+  ollama:
+    image: ollama/ollama:latest
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama-data:/root/.ollama
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+  # разовая загрузка модели (первый запуск): docker compose run --rm ollama-pull
+  ollama-pull:
+    image: ollama/ollama:latest
+    profiles: ["tools"]
+    environment:
+      - OLLAMA_HOST=http://ollama:11434
+    entrypoint: ["ollama", "pull", "qwen2.5:7b"]
+    depends_on:
+      - ollama
+
+  # ===== Langfuse: полный трейс вызовов LLM (self-hosted, docker-compose.yml
+  # из их репозитория https://github.com/langfuse/langfuse, сервисы
+  # переименованы с префиксом langfuse- и разведены по портам, чтобы не
+  # конфликтовать с нашими postgres/redis; секреты — см. .env) =====
+  # UI: http://localhost:3000
+
+  langfuse-worker:
+    image: docker.io/langfuse/langfuse-worker:3
+    restart: always
+    depends_on: &langfuse-depends-on
+      langfuse-postgres:
+        condition: service_healthy
+      langfuse-minio:
+        condition: service_healthy
+      langfuse-redis:
+        condition: service_healthy
+      langfuse-clickhouse:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:3030:3030"
+    environment: &langfuse-worker-env
+      NEXTAUTH_URL: http://localhost:3000
+      DATABASE_URL: postgresql://postgres:${LANGFUSE_PG_PASSWORD}@langfuse-postgres:5432/postgres
+      SALT: ${LANGFUSE_SALT}
+      ENCRYPTION_KEY: ${LANGFUSE_ENCRYPTION_KEY}
+      TELEMETRY_ENABLED: "false"
+      CLICKHOUSE_MIGRATION_URL: clickhouse://langfuse-clickhouse:9000
+      CLICKHOUSE_URL: http://langfuse-clickhouse:8123
+      CLICKHOUSE_USER: clickhouse
+      CLICKHOUSE_PASSWORD: ${LANGFUSE_CLICKHOUSE_PASSWORD}
+      CLICKHOUSE_CLUSTER_ENABLED: "false"
+      LANGFUSE_S3_EVENT_UPLOAD_BUCKET: langfuse
+      LANGFUSE_S3_EVENT_UPLOAD_REGION: auto
+      LANGFUSE_S3_EVENT_UPLOAD_ACCESS_KEY_ID: minio
+      LANGFUSE_S3_EVENT_UPLOAD_SECRET_ACCESS_KEY: ${LANGFUSE_MINIO_PASSWORD}
+      LANGFUSE_S3_EVENT_UPLOAD_ENDPOINT: http://langfuse-minio:9000
+      LANGFUSE_S3_EVENT_UPLOAD_FORCE_PATH_STYLE: "true"
+      LANGFUSE_S3_EVENT_UPLOAD_PREFIX: events/
+      LANGFUSE_S3_MEDIA_UPLOAD_BUCKET: langfuse
+      LANGFUSE_S3_MEDIA_UPLOAD_REGION: auto
+      LANGFUSE_S3_MEDIA_UPLOAD_ACCESS_KEY_ID: minio
+      LANGFUSE_S3_MEDIA_UPLOAD_SECRET_ACCESS_KEY: ${LANGFUSE_MINIO_PASSWORD}
+      LANGFUSE_S3_MEDIA_UPLOAD_ENDPOINT: http://localhost:9090
+      LANGFUSE_S3_MEDIA_UPLOAD_FORCE_PATH_STYLE: "true"
+      LANGFUSE_S3_MEDIA_UPLOAD_PREFIX: media/
+      REDIS_HOST: langfuse-redis
+      REDIS_PORT: "6379"
+      REDIS_AUTH: ${LANGFUSE_REDIS_AUTH}
+
+  langfuse-web:
+    image: docker.io/langfuse/langfuse:3
+    restart: always
+    depends_on: *langfuse-depends-on
+    ports:
+      - "3000:3000"
+    environment:
+      <<: *langfuse-worker-env
+      NEXTAUTH_SECRET: ${LANGFUSE_NEXTAUTH_SECRET}
+      LANGFUSE_INIT_ORG_ID: hypofactory
+      LANGFUSE_INIT_ORG_NAME: "Фабрика гипотез"
+      LANGFUSE_INIT_PROJECT_ID: hypofactory
+      LANGFUSE_INIT_PROJECT_NAME: hypofactory
+      LANGFUSE_INIT_PROJECT_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY}
+      LANGFUSE_INIT_PROJECT_SECRET_KEY: ${LANGFUSE_SECRET_KEY}
+      LANGFUSE_INIT_USER_EMAIL: ${LANGFUSE_INIT_USER_EMAIL:-admin@hypofactory.local}
+      LANGFUSE_INIT_USER_NAME: admin
+      LANGFUSE_INIT_USER_PASSWORD: ${LANGFUSE_INIT_USER_PASSWORD}
+
+  langfuse-clickhouse:
+    image: docker.io/clickhouse/clickhouse-server
+    restart: always
+    user: "101:101"
+    environment:
+      CLICKHOUSE_DB: default
+      CLICKHOUSE_USER: clickhouse
+      CLICKHOUSE_PASSWORD: ${LANGFUSE_CLICKHOUSE_PASSWORD}
+    volumes:
+      - langfuse-clickhouse-data:/var/lib/clickhouse
+      - langfuse-clickhouse-logs:/var/log/clickhouse-server
+    ports:
+      - "127.0.0.1:8123:8123"
+      - "127.0.0.1:9100:9000" # хост-порт сдвинут, 9000 занят minio/др. на некоторых машинах
+    healthcheck:
+      test: wget --no-verbose --tries=1 --spider http://localhost:8123/ping || exit 1
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 1s
+
+  langfuse-minio:
+    image: cgr.dev/chainguard/minio
+    restart: always
+    entrypoint: sh
+    command: -c 'mkdir -p /data/langfuse && minio server --address ":9000" --console-address ":9001" /data'
+    environment:
+      MINIO_ROOT_USER: minio
+      MINIO_ROOT_PASSWORD: ${LANGFUSE_MINIO_PASSWORD}
+    ports:
+      - "9090:9000"
+      - "127.0.0.1:9091:9001"
+    volumes:
+      - langfuse-minio-data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 1s
+      timeout: 5s
+      retries: 5
+      start_period: 1s
+
+  langfuse-redis:
+    image: docker.io/redis:7
+    restart: always
+    command: >
+      --requirepass ${LANGFUSE_REDIS_AUTH}
+      --maxmemory-policy noeviction
+    ports:
+      - "127.0.0.1:6380:6379" # хост-порт сдвинут на случай локального redis
+    volumes:
+      - langfuse-redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 3s
+      timeout: 10s
+      retries: 10
+
+  # ОТДЕЛЬНЫЙ postgres для Langfuse (своя схема/версия) — наш hypofactory
+  # postgres (сервис `postgres` выше) занят под историю сессий api/store.py.
+  langfuse-postgres:
+    image: docker.io/postgres:17
+    restart: always
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${LANGFUSE_PG_PASSWORD}
+      POSTGRES_DB: postgres
+      TZ: UTC
+      PGTZ: UTC
+    ports:
+      - "127.0.0.1:5433:5432" # хост-порт сдвинут — наш сервис postgres уже на 5432
+    volumes:
+      - langfuse-postgres-data:/var/lib/postgresql/data
+
+  # frontend (Streamlit, отдельный человек) подключается к api по http://api:8000
+  # frontend:
+  #   build: ./frontend
+  #   ports:
+  #     - "8501:8501"
+  #   environment:
+  #     - API_BASE_URL=http://api:8000
+  #   depends_on:
+  #     - api
 
 volumes:
   hf-cache:
+  qdrant-data:
+  postgres-data:
+  ollama-data:
+  langfuse-postgres-data:
+  langfuse-clickhouse-data:
+  langfuse-clickhouse-logs:
+  langfuse-minio-data:
+  langfuse-redis-data:
