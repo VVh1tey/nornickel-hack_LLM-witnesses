@@ -2,6 +2,7 @@
 import requests
 import json
 import streamlit as st
+from io import BytesIO
 
 class LLMsWitnessUi:
 
@@ -29,23 +30,24 @@ class LLMsWitnessUi:
     def readme(self):
         ...
 
-    def send_hypotheses(self):
-        if self.state.hypotheses:
-            sending_button = st.button('send to ai', use_container_width= True, type='primary')
-            if sending_button:
-                for  hypo in self.state.hypotheses:
-                    try:
-                        response = requests.post(self.addr + '/v1/send_hypo/"', json={
-                            'text': hypo
-                        })
-                        self.state.messages.append({'code': response.status_code, 'text': hypo})
-                    
-                    except requests.ConnectionError:
-                        st.error(f'Connection faild, check your server or config: {self.addr}')
-                        self.state.messages.append({'code': 400, 'text': hypo})
-                else:
-                    st.rerun()
-                
+
+    def send_package(self):
+        if self.state.files and self.state.hypotheses:
+            hypotheses = {
+                'hypotheses':self.state.hypotheses,
+            }
+
+            files = {filename: BytesIO(file) for filename, file in self.state.files}
+
+            #post request
+
+        else:
+            if not self.state.files and self.state.hyotheses:
+                st.error('Any file wasnt upload')
+            else:
+                st.error('Any hypo wasnt upload')
+
+
         if self.state.messages:
             for m in self.state.messages:
                 if m['code'] == 200:
@@ -103,7 +105,7 @@ class LLMsWitnessUi:
             st.rerun()
 
     def loop(self):
-        tabs = st.tabs(['Hypotheses studio', 'Agent responses', 'logs'])
+        tabs = st.tabs(['Hypotheses studio', 'Agent responses'])
         with tabs[0]:
             st.header('Hello llmwui!')
             self.load_file()
