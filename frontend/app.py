@@ -2,32 +2,14 @@
 import requests
 import json
 import streamlit as st
-from streamlit.runtime.uploaded_file_manager import UploadedFile
-
-
-
-
-def file_options_button(text: str, action: callable):
-    columns = st.columns([1,8])
-    with columns[0]:
-
-
-        if st.button(text, width=96):
-            with columns[1]:
-                action()
-
-def upload_file() -> UploadedFile:
-    file = st.file_uploader('Load file')
-    if file:
-        st.success('File uploaded')
-        return file
 
 class LLMsWitnessUi:
 
     def __init__(self):
         self.state = st.session_state
-        if 'file' not in self.state:
-            self.state.file = None
+        if 'files' not in self.state:
+            self.state.files = dict()
+
 
         if 'hypotheses' not in self.state:
             self.state.hypotheses = []
@@ -88,6 +70,13 @@ class LLMsWitnessUi:
                         st.rerun()
                 st.divider()
 
+    def show_files(self):
+        if self.state.files:
+            columns = st.columns(len(self.state.files))
+            for i, f in enumerate(list(self.state.files)):
+                with columns[i]:
+                    st.text(f)
+
     def input_hypo(self):
         hypo = st.text_area('Placeholder for your genius idea:').strip()
         hypo_button = st.button('create hypo', use_container_width=True,)
@@ -107,20 +96,18 @@ class LLMsWitnessUi:
         
         
     def load_file(self):
-        file = upload_file()
+        file = st.file_uploader('Upload files')
         if file:
-            self.state.file = file
-        if self.state.file:
-            file_options_button('size',lambda: st.markdown(f"{self.state.file.size}b"))
-            file_options_button('name', lambda: st.markdown(f"{self.state.file.name}"))
-            file_options_button('head', lambda: st.markdown(f"{self.state.file.read().decode('utf-8')[:256]}"))
-
+            self.state.files[file.name] = file
+            st.success(f'{file.name} {file.size} uploaded')
+            st.rerun()
 
     def loop(self):
         tabs = st.tabs(['Hypotheses studio', 'Agent responses', 'logs'])
         with tabs[0]:
             st.header('Hello llmwui!')
             self.load_file()
+            self.show_files()
             self.input_hypo()                
             self.send_hypotheses()
         
