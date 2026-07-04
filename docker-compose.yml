@@ -1,0 +1,23 @@
+services:
+  app:
+    build: .
+    ports:
+      - "8501:8501"
+    env_file: .env
+    volumes:
+      - ./data:/app/data                     # корпус, индексы LightRAG, кэши LLM переживают пересборку
+      - hf-cache:/root/.cache/huggingface    # веса bge-m3 не скачиваются заново
+
+  # разовая индексация корпуса в LightRAG (P2, запускать фоном):
+  # docker compose run --rm indexer
+  indexer:
+    build: .
+    profiles: ["tools"]
+    env_file: .env
+    volumes:
+      - ./data:/app/data
+      - hf-cache:/root/.cache/huggingface
+    command: ["python", "backend/scripts/index_lightrag.py"]
+
+volumes:
+  hf-cache:

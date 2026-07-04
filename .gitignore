@@ -216,3 +216,22 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# данные не коммитим (исходники большие, индексы пересобираемые)
+data/raw/*
+data/processed/*
+data/lightrag/*
+!data/**/.gitkeep
+
+# кэши eval
+.deepeval/
+
+# рабочие файлы планирования
+.claude/
+CLAUDE.md
+PLAN.md
+TASK.md
+Solution.md
+
+# материалы организаторов
+Задача 1. Фабрика гипотез/
