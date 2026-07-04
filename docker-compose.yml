@@ -87,13 +87,20 @@ services:
               count: all
               capabilities: [gpu]
 
-  # разовая загрузка модели (первый запуск): docker compose run --rm ollama-pull
+  # разовая загрузка моделей (первый запуск, или после смены OLLAMA_MODEL/
+  # RERANK_MODEL в .env): docker compose run --rm ollama-pull — тянет и
+  # основную LLM, и реранкер (llm/rerank.py) одной командой.
   ollama-pull:
     image: ollama/ollama:latest
     profiles: ["tools"]
     environment:
       - OLLAMA_HOST=http://ollama:11434
-    entrypoint: ["ollama", "pull", "qwen2.5:7b"]
+    entrypoint:
+      - sh
+      - -c
+      - |
+        ollama pull ${OLLAMA_MODEL:-qwen2.5:7b}
+        ollama pull ${RERANK_MODEL:-dengcao/Qwen3-Reranker-0.6B:Q8_0}
     depends_on:
       - ollama
 

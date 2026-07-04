@@ -76,7 +76,7 @@ cp .env.example .env
 # сгенерировать секреты Langfuse (см. таблицу переменных ниже) и вписать в .env
 
 docker compose up -d ollama qdrant postgres langfuse-postgres langfuse-clickhouse langfuse-minio langfuse-redis langfuse-worker langfuse-web
-docker compose run --rm ollama-pull            # разово: скачать модель qwen2.5:7b
+docker compose run --rm ollama-pull            # разово: скачать LLM (qwen2.5:7b) и реранкер
 
 docker compose up --build api frontend -d
 ```
@@ -145,10 +145,11 @@ uv sync
 uv run streamlit run app.py                # http://localhost:8501, читает ../configs/api.json
 ```
 
-Для разработки без Docker нужны локально доступные `ollama serve`
-(`ollama pull qwen2.5:7b`), Qdrant (`docker run -p 6333:6333 qdrant/qdrant`) и
-Postgres — либо просто `docker compose up -d ollama qdrant postgres`, а
-`api`/скрипты гонять через `uv run` (сервисы слушают на localhost).
+Для разработки без Docker нужны локально доступные `ollama serve` с моделями
+(`ollama pull qwen2.5:7b` и `ollama pull dengcao/Qwen3-Reranker-0.6B:Q8_0`,
+или `docker compose run --rm ollama-pull`), Qdrant (`docker run -p 6333:6333
+qdrant/qdrant`) и Postgres — либо просто `docker compose up -d ollama qdrant
+postgres`, а `api`/скрипты гонять через `uv run` (сервисы слушают на localhost).
 
 ## Фронтенд (Streamlit)
 

@@ -1,5 +1,6 @@
 """Реранкер поверх LightRAG retrieval: Qwen3-Reranker-0.6B через Ollama
-(docker compose: `ollama pull dengcao/Qwen3-Reranker-0.6B:Q8_0`).
+(модель задаётся RERANK_MODEL в .env; скачивается автоматически командой
+`docker compose run --rm ollama-pull`, см. docker-compose.yml).
 
 Отдельная маленькая модель, не участвует в генерации/верификации/ранкере
 гипотез — только пересортировывает retrieval-результаты LightRAG перед их
@@ -26,7 +27,7 @@ from hypofactory import config
 
 logger = logging.getLogger(__name__)
 
-RERANK_MODEL = "dengcao/Qwen3-Reranker-0.6B:Q8_0"
+RERANK_MODEL = config.RERANK_MODEL
 
 # Модель маленькая и быстрая, но обрабатывает документы по одному — держим
 # конкурентность отдельно от основного LLM_MAX_CONCURRENCY, чтобы не душить
