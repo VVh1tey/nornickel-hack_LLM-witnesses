@@ -4,17 +4,18 @@
 
 from __future__ import annotations
 
-import json
 from typing import Any, AsyncIterator, Optional, TypedDict, Union
 
 from langgraph.graph import END, START, StateGraph
 
-from hypofactory import config, tracing
+from hypofactory import tracing
 from hypofactory.analysis.tails_analyzer import analyze as analyze_tails
 from hypofactory.ingestion.excel_tails import parse_loss_table
-from hypofactory.pipeline.generator import generate_hypotheses
+from hypofactory.pipeline.feedback_learning import load_approved_pool
+from hypofactory.pipeline.generator import _load_hypotheses_db, generate_hypotheses
 from hypofactory.pipeline.query_builder import build_queries
 from hypofactory.pipeline.ranker import rank
+from hypofactory.pipeline.rejected_filter import filter_against_rejected
 from hypofactory.pipeline.roadmap import build_roadmap
 from hypofactory.pipeline.target_spec import parse_target
 from hypofactory.pipeline.verification import build_known_hypotheses_index, verify
@@ -30,6 +31,11 @@ from hypofactory.schemas import (
 
 _ROADMAP_TOP_N = 5
 _QUERIES_PER_RUN = 5
+_TARGET_N_HYPOTHESES = 10
+# генерируем с запасом: часть отсеется фильтром по сходству с отклонёнными
+# (rejected_filter) — без запаса пользователь получал бы меньше гипотез, чем
+# ожидает, каждый раз как что-то попадает под фильтр
+_GENERATION_BUFFER = 3
 
 
 class PipelineState(TypedDict, total=False):
@@ -42,12 +48,6 @@ class PipelineState(TypedDict, total=False):
     queries: list[str]
     retrieval: RetrievalResult
     hypotheses: list[Hypothesis]
-
-
-def _load_hypotheses_db() -> dict[str, list[str]]:
-    if config.HYPOTHESES_DB_PATH.exists():
-        return json.loads(config.HYPOTHESES_DB_PATH.read_text(encoding="utf-8"))
-    return {}
 
 
 async def _node_analyzer(state: PipelineState) -> dict[str, Any]:
@@ -87,13 +87,24 @@ async def _node_retrieval(state: PipelineState) -> dict[str, Any]:
 
 
 async def _node_generator(state: PipelineState) -> dict[str, Any]:
-    hypotheses_db = _load_hypotheses_db()
-    hyps = await generate_hypotheses(state["spec"], state["findings"], state["retrieval"], hypotheses_db)
+    hyps = await generate_hypotheses(
+        state["spec"], state["findings"], state["retrieval"], n=_TARGET_N_HYPOTHESES + _GENERATION_BUFFER
+    )
     return {"hypotheses": hyps}
+
+
+async def _node_reject_filter(state: PipelineState) -> dict[str, Any]:
+    filtered = await filter_against_rejected(state["hypotheses"])
+    return {"hypotheses": filtered[:_TARGET_N_HYPOTHESES]}
 
 
 async def _node_verification(state: PipelineState) -> dict[str, Any]:
     hypotheses_db = _load_hypotheses_db()
+    approved_pool = load_approved_pool()
+    if approved_pool:
+        # одобренные ранее гипотезы тоже считаются "уже пробовали" — не имеет
+        # смысла заново предлагать эксперту то же самое как новую идею
+        hypotheses_db = {**hypotheses_db, "Одобрено экспертом ранее": [p["statement"] for p in approved_pool]}
     known_index = await build_known_hypotheses_index(hypotheses_db)  # один раз на весь прогон
     context_texts = [c.content for c in state["retrieval"].chunks]
     verified = [await verify(h, state["spec"], known_index, context_texts) for h in state["hypotheses"]]
@@ -120,6 +131,7 @@ def build_graph():
     graph.add_node("query_builder", _node_query_builder)
     graph.add_node("retrieval", _node_retrieval)
     graph.add_node("generator", _node_generator)
+    graph.add_node("reject_filter", _node_reject_filter)
     graph.add_node("verification", _node_verification)
     graph.add_node("ranker", _node_ranker)
     graph.add_node("roadmap", _node_roadmap)
@@ -129,7 +141,8 @@ def build_graph():
     graph.add_edge("target_spec", "query_builder")
     graph.add_edge("query_builder", "retrieval")
     graph.add_edge("retrieval", "generator")
-    graph.add_edge("generator", "verification")
+    graph.add_edge("generator", "reject_filter")
+    graph.add_edge("reject_filter", "verification")
     graph.add_edge("verification", "ranker")
     graph.add_edge("ranker", "roadmap")
     graph.add_edge("roadmap", END)
@@ -142,6 +155,7 @@ _NODE_MESSAGES = {
     "query_builder": "Построение поисковых запросов",
     "retrieval": "Поиск по базе знаний (LightRAG)",
     "generator": "Генерация гипотез",
+    "reject_filter": "Отсев гипотез, похожих на ранее отклонённые экспертом",
     "verification": "Проверка гипотез (ограничения, дубликаты, физика)",
     "ranker": "Ранжирование гипотез",
     "roadmap": "Построение дорожной карты проверки",

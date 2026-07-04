@@ -21,6 +21,7 @@ EXPECTED_NODE_ORDER = [
     "query_builder",
     "retrieval",
     "generator",
+    "reject_filter",
     "verification",
     "ranker",
     "roadmap",

@@ -9,6 +9,7 @@
     POST /api/sessions/{id}/rerank                            -> пересортировка по новым весам (без LLM)
     GET  /api/sessions/{id}/export?format=csv|json|docx      -> файл
     GET  /api/sessions/{id}/hypotheses/{hid}/graph            -> HTML подграфа
+    POST /api/admin/rejected-index/rebuild                    -> форс. пересборка эмбеддинг-кэша отклонённых (обычно не нужна вручную)
 
 Хранение — Postgres (api/store.py, JSONB на сессию). Пайплайн стартует в BackgroundTasks.
 """
@@ -23,13 +24,13 @@ from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, UploadF
 from fastapi.responses import FileResponse, HTMLResponse
 from pydantic import BaseModel
 
-import json
-
 from hypofactory import config
 from hypofactory.api.store import SessionState, list_sessions, load_session, save_session
 from hypofactory.export.csv_json import export_csv, export_json
 from hypofactory.export.docx_report import export_docx
-from hypofactory.pipeline.generator import revise_hypothesis
+from hypofactory.pipeline.feedback_learning import add_approved_hypothesis, load_approved_pool
+from hypofactory.pipeline.generator import _load_hypotheses_db, revise_hypothesis
+from hypofactory.pipeline.rejected_filter import add_rejected_hypothesis, rebuild_rejected_index
 from hypofactory.pipeline.graph import run_pipeline
 from hypofactory.pipeline.ranker import compute_weighted_score, rerank as rerank_hypotheses, score_hypothesis
 from hypofactory.pipeline.roadmap import build_roadmap
@@ -143,47 +144,93 @@ async def feedback(session_id: str, hypothesis_id: str, body: FeedbackRequest):
             if body.comment is not None:
                 hyp.comment = body.comment
             await save_session(session)
+            if body.action == "approve":
+                # обучение на фидбэке: пополняем пул для retrieval-based
+                # few-shot (generator._retrieve_fewshot) — с дедупом внутри
+                await add_approved_hypothesis(hyp, session_id)
+            elif body.action == "reject":
+                # пополняем индекс "похоже на отклонённое" (rejected_filter.py) —
+                # будущие генерации будут отсеивать похожие идеи автоматически
+                await add_rejected_hypothesis(hyp, session_id)
             return hyp.model_dump(mode="json")
     raise HTTPException(404, "гипотеза не найдена")
 
 
-def _load_hypotheses_db() -> dict:
-    if config.HYPOTHESES_DB_PATH.exists():
-        return json.loads(config.HYPOTHESES_DB_PATH.read_text(encoding="utf-8"))
-    return {}
+def _known_hypotheses_db() -> dict:
+    """Историч. hypotheses_db.json + пул одобренных экспертами — та же логика,
+    что в pipeline/graph.py._node_verification (см. комментарий там)."""
+    db = _load_hypotheses_db()
+    approved_pool = load_approved_pool()
+    if approved_pool:
+        db = {**db, "Одобрено экспертом ранее": [p["statement"] for p in approved_pool]}
+    return db
 
 
 class RegenerateRequest(BaseModel):
     comment: str
 
 
+async def _regenerate_background(session_id: str, hypothesis_id: str, comment: str) -> None:
+    """Фоновая работа: то же самое, что раньше делал синхронно эндпоинт.
+    Выполняется в процессе ASGI-сервера независимо от браузера клиента —
+    если пользователь закроет вкладку/перезагрузит страницу, перегенерация
+    всё равно досчитается и сохранится, а флаг regenerating (в Postgres)
+    покажет актуальный статус при следующем обращении к сессии."""
+    session = await load_session(session_id)
+    if session is None:
+        return
+    hyp = next((h for h in session.hypotheses if h.id == hypothesis_id), None)
+    if hyp is None:
+        return
+
+    try:
+        spec = await parse_target(session.goal, session.constraints)
+        retrieval = await retrieve(hyp.statement, k=10)
+        context_texts = [c.content for c in retrieval.chunks]
+
+        revised = await revise_hypothesis(hyp, comment, retrieval)
+        known_index = await build_known_hypotheses_index(_known_hypotheses_db())
+        revised = await verify(revised, spec, known_index, context_texts)
+        revised = await score_hypothesis(revised)
+        revised.score = compute_weighted_score(revised, session.weights)
+        revised.roadmap = await build_roadmap(revised)
+        revised.regenerating = False
+    except Exception as e:  # noqa: BLE001 — не роняем фон, отражаем ошибку в самой гипотезе
+        revised = hyp
+        revised.regenerating = False
+        revised.comment = f"[Ошибка перегенерации: {e}] {comment}"
+
+    # перечитываем сессию заново: пока считали (десятки секунд), пользователь
+    # мог успеть проставить фидбэк на другую гипотезу — не затираем это
+    session = await load_session(session_id)
+    if session is None:
+        return
+    session.hypotheses = [revised if h.id == hypothesis_id else h for h in session.hypotheses]
+    await save_session(session)
+
+
 @app.post("/api/sessions/{session_id}/hypotheses/{hypothesis_id}/regenerate")
-async def regenerate_hypothesis(session_id: str, hypothesis_id: str, body: RegenerateRequest):
+async def regenerate_hypothesis(session_id: str, hypothesis_id: str, body: RegenerateRequest, background_tasks: BackgroundTasks):
     """HITL: эксперт оставляет комментарий к гипотезе -> LLM переписывает её
     с учётом комментария -> заново проходит verify/rank/roadmap (содержание
-    изменилось, старые оценки устарели). id гипотезы и место в списке не меняются."""
+    изменилось, старые оценки устарели). id гипотезы и место в списке не меняются.
+
+    Сама перегенерация — фоновая задача (как и основной пайплайн): эндпоинт
+    сразу помечает гипотезу regenerating=True и возвращает управление, не
+    блокируя запрос на десятки секунд LLM-вызовов."""
     session = await load_session(session_id)
     if session is None:
         raise HTTPException(404, "сессия не найдена")
     hyp = next((h for h in session.hypotheses if h.id == hypothesis_id), None)
     if hyp is None:
         raise HTTPException(404, "гипотеза не найдена")
+    if hyp.regenerating:
+        raise HTTPException(409, "гипотеза уже перегенерируется")
 
-    spec = await parse_target(session.goal, session.constraints)
-    retrieval = await retrieve(hyp.statement, k=10)
-    context_texts = [c.content for c in retrieval.chunks]
-
-    revised = await revise_hypothesis(hyp, body.comment, retrieval)
-
-    known_index = await build_known_hypotheses_index(_load_hypotheses_db())
-    revised = await verify(revised, spec, known_index, context_texts)
-    revised = await score_hypothesis(revised)
-    revised.score = compute_weighted_score(revised, session.weights)
-    revised.roadmap = await build_roadmap(revised)
-
-    session.hypotheses = [revised if h.id == hypothesis_id else h for h in session.hypotheses]
+    hyp.regenerating = True
     await save_session(session)
-    return revised.model_dump(mode="json")
+    background_tasks.add_task(_regenerate_background, session_id, hypothesis_id, body.comment)
+    return {"status": "regenerating", "hypothesis_id": hypothesis_id}
 
 
 @app.post("/api/sessions/{session_id}/rerank")
@@ -240,6 +287,15 @@ async def debug_graph_stats():
 async def debug_graph_html():
     """Весь граф знаний целиком (не подграф одной гипотезы, как .../graph)."""
     return render_full_graph_html()
+
+
+@app.post("/api/admin/rejected-index/rebuild")
+async def rebuild_rejected_index_endpoint():
+    """Форсированная пересборка эмбеддинг-кэша отклонённых гипотез (rejected_filter.py).
+    Обычно НЕ нужна вручную — кэш и так лениво актуализируется на каждой
+    проверке; полезна, если сменили модель эмбеддингов и нужно гарантированно
+    всё пересчитать заново."""
+    return await rebuild_rejected_index()
 
 
 @app.get("/health")

@@ -97,6 +97,7 @@ class Hypothesis(BaseModel):
     status: HypothesisStatus = HypothesisStatus.NEW
     roadmap: list[RoadmapStep] = Field(default_factory=list)
     comment: Optional[str] = None  # свободный комментарий эксперта (HITL) — используется при regenerate
+    regenerating: bool = False  # идёт фоновая перегенерация — переживает перезагрузку страницы (хранится в Postgres)
 
 
 class PipelineStatus(BaseModel):

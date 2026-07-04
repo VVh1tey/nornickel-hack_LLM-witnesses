@@ -1,17 +1,28 @@
 """Hypothesis Generator: findings + retrieval + few-shot реальных гипотез -> Hypothesis[].
 
-Few-shot строится ТОЛЬКО из hypotheses_db.json (примеры 1-3) — Пример 4 (ТОФ)
-держим held-out для eval (см. PLAN.md §4, ingestion/docx_hypotheses.py).
+Few-shot строится из hypotheses_db.json (примеры 1-3, статичный историч.
+набор — Пример 4/ТОФ держим held-out для eval, см. PLAN.md §4) ПЛЮС растущий
+пул одобренных экспертами гипотез (feedback_learning.py). Из объединённого
+пула в промпт попадают не ВСЕ примеры, а top-K, отобранные retrieval'ом по
+релевантности текущей цели (см. _retrieve_fewshot) — иначе с каждым approve
+промпт рос бы неограниченно.
 """
 
 from __future__ import annotations
 
+import json
 import uuid
 
 from pydantic import BaseModel, Field
 
+from hypofactory import config
 from hypofactory.llm.client import get_client
+from hypofactory.llm.embeddings import aembed, cached_embed_texts, cosine_similarity
+from hypofactory.pipeline.feedback_learning import load_approved_pool
 from hypofactory.schemas import Hypothesis, LossFinding, RetrievalResult, SourceRef, TargetSpec
+
+FEWSHOT_TOP_K = 15
+FEWSHOT_CACHE_PATH = config.PROCESSED_DIR / "fewshot_embeddings_cache.npz"
 
 GENERATOR_SYSTEM_PROMPT = """Ты — эксперт-исследователь в области обогащения полезных ископаемых \
 (флотация, измельчение, классификация, реагентный режим).
@@ -104,16 +115,56 @@ def _classify_sphere(text: str) -> str:
     return _OTHER_SPHERE
 
 
-def _format_few_shot(hypotheses_db: dict[str, list[str]]) -> str:
-    """Группируем по ТЕХНОЛОГИЧЕСКОЙ СФЕРЕ, а не по фабрике: иначе модель неявно
+def _load_hypotheses_db() -> dict[str, list[str]]:
+    if config.HYPOTHESES_DB_PATH.exists():
+        return json.loads(config.HYPOTHESES_DB_PATH.read_text(encoding="utf-8"))
+    return {}
+
+
+def _all_fewshot_entries() -> list[dict]:
+    """Статичный историч. набор (hypotheses_db.json, по фабрикам) + растущий
+    пул одобренных экспертами гипотез (feedback_learning.py) — единый пул-кандидат
+    для retrieval, а не то, что целиком уходит в промпт."""
+    entries = []
+    for factory, hyps in _load_hypotheses_db().items():
+        for h in hyps:
+            entries.append({"statement": h, "source": f"фабрика {factory}"})
+    for p in load_approved_pool():
+        entries.append({"statement": p["statement"], "source": "одобрено экспертом ранее"})
+    return entries
+
+
+async def _retrieve_fewshot(spec: TargetSpec, findings: list[LossFinding], top_k: int = FEWSHOT_TOP_K) -> list[dict]:
+    """top-K релевантных примеров из объединённого пула (история + одобренное),
+    а не весь пул целиком — иначе промпт рос бы неограниченно с каждым approve
+    (см. docstring модуля). Релевантность — косинус к цели+находкам, не к
+    полному тексту промпта."""
+    entries = _all_fewshot_entries()
+    if not entries:
+        return []
+    if len(entries) <= top_k:
+        return entries
+
+    texts = [e["statement"] for e in entries]
+    embeddings = await cached_embed_texts(texts, FEWSHOT_CACHE_PATH)
+
+    query_text = spec.goal + "\n" + "\n".join(f.interpretation for f in findings[:5])
+    query_emb = await aembed([query_text], context="query")
+    sims = cosine_similarity(query_emb, embeddings)[0]
+    top_idx = sims.argsort()[::-1][:top_k]
+    return [entries[i] for i in top_idx]
+
+
+def _format_few_shot(entries: list[dict]) -> str:
+    """Группируем по ТЕХНОЛОГИЧЕСКОЙ СФЕРЕ, а не по источнику: иначе модель неявно
     копирует пропорции тем в примерах (у КГМК/НОФ доминируют мельницы/флотация)
     и стабильно недогенерирует гипотезы про классификацию — эту асимметрию
     поймали на eval held-out Примера 4, где эксперты ТОФ наоборот в основном
-    предлагали именно классификаторы/грохота (см. PLAN.md)."""
+    предлагали именно классификаторы/грохота (см. PLAN.md). entries — уже
+    отобранный retrieval'ом топ-K, а не весь пул (см. _retrieve_fewshot)."""
     by_sphere: dict[str, list[str]] = {}
-    for factory, hyps in hypotheses_db.items():
-        for h in hyps:
-            by_sphere.setdefault(_classify_sphere(h), []).append(f"{h} (фабрика {factory})")
+    for e in entries:
+        by_sphere.setdefault(_classify_sphere(e["statement"]), []).append(f"{e['statement']} ({e['source']})")
 
     order = [sphere for sphere, _ in _SPHERES] + [_OTHER_SPHERE]
     blocks = []
@@ -130,10 +181,10 @@ async def generate_hypotheses(
     spec: TargetSpec,
     findings: list[LossFinding],
     retrieval: RetrievalResult,
-    hypotheses_db: dict[str, list[str]],
     n: int = 10,
 ) -> list[Hypothesis]:
     client = get_client()
+    fewshot_entries = await _retrieve_fewshot(spec, findings)
 
     prompt = f"""ЦЕЛЬ: {spec.goal}
 KPI: {spec.kpi or "не указан явно"}
@@ -146,7 +197,7 @@ KPI: {spec.kpi or "не указан явно"}
 КОНТЕКСТ ИЗ ЛИТЕРАТУРЫ/РЕГЛАМЕНТОВ:
 {_format_context(retrieval)}
 
-{_format_few_shot(hypotheses_db)}
+{_format_few_shot(fewshot_entries)}
 
 Сформулируй {n} гипотез."""
 

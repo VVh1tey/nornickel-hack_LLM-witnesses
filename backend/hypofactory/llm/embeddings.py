@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+from pathlib import Path
 from typing import Any, Optional
 
 import numpy as np
@@ -136,3 +137,36 @@ def cosine_similarity(a: np.ndarray, b: np.ndarray) -> np.ndarray:
     if a.size == 0 or b.size == 0:
         return np.zeros((a.shape[0], b.shape[0]), dtype=np.float32)
     return a @ b.T
+
+
+async def cached_embed_texts(texts: list[str], cache_path: Path) -> np.ndarray:
+    """Эмбеддинги с кэшем на диске (.npz: texts + embeddings) — пересчитывает
+    только те тексты, которых не было в кэше с прошлого раза. Нужен для
+    РАСТУЩИХ пулов (одобренные/отклонённые гипотезы — см. pipeline/
+    feedback_learning.py), иначе на каждый запрос эмбеддили бы весь пул заново.
+    Возвращает эмбеддинги строго в порядке texts (не в порядке кэша)."""
+    if not texts:
+        return np.zeros((0, config.EMBEDDING_DIM), dtype=np.float32)
+
+    cached_texts: list[str] = []
+    cached_embeddings = np.zeros((0, config.EMBEDDING_DIM), dtype=np.float32)
+    if cache_path.exists():
+        data = np.load(cache_path, allow_pickle=True)
+        cached_texts = list(data["texts"])
+        cached_embeddings = data["embeddings"]
+
+    cached_index = {t: i for i, t in enumerate(cached_texts)}
+    new_texts = [t for t in dict.fromkeys(texts) if t not in cached_index]  # dedup + порядок
+
+    if new_texts:
+        new_embeddings = await aembed(new_texts, context="document")
+        all_texts = cached_texts + new_texts
+        all_embeddings = (
+            np.vstack([cached_embeddings, new_embeddings]) if cached_embeddings.size else new_embeddings
+        )
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+        np.savez(cache_path, texts=np.array(all_texts, dtype=object), embeddings=all_embeddings)
+        cached_index = {t: i for i, t in enumerate(all_texts)}
+        cached_embeddings = all_embeddings
+
+    return cached_embeddings[[cached_index[t] for t in texts]]

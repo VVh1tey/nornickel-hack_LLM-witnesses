@@ -263,23 +263,27 @@ class LLMsWitnessUi:
             st.error(f'❌ Ошибка: {e}')
 
     def send_regenerate(self, session_id: str, hypothesis_id: str, comment: str):
-        """Переписать гипотезу с учётом комментария эксперта (LLM) и заново её проверить/оценить"""
+        """Запускает перегенерацию гипотезы — сама работа идёт в фоне на
+        сервере (не блокирует эту страницу и переживает её закрытие/перезагрузку:
+        статус regenerating хранится в Postgres). Здесь только отправляем
+        запрос и сразу возвращаем управление — статус смотреть после
+        "Обновить текущую сессию"."""
         if not comment or not comment.strip():
             st.warning('⚠️ Напишите комментарий — с чем не согласны и что поправить')
             return
         try:
-            with st.spinner('Переписываем гипотезу с учётом комментария и пересчитываем оценки...'):
-                response = requests.post(
-                    self.addr + HANDLE_REGENERATE.replace('{session_id}', session_id).replace('{hypothesis_id}', hypothesis_id),
-                    json={'comment': comment.strip()}
-                )
+            response = requests.post(
+                self.addr + HANDLE_REGENERATE.replace('{session_id}', session_id).replace('{hypothesis_id}', hypothesis_id),
+                json={'comment': comment.strip()}
+            )
             if response.status_code == 200:
-                st.success('✅ Гипотеза переписана')
+                st.info('⏳ Перегенерация запущена в фоне — займёт до пары минут. Можно закрыть вкладку/переключиться, результат сохранится на сервере. Загляните позже и нажмите «Обновить текущую сессию».')
                 self.get_session_data(session_id)
-                time.sleep(0.5)
                 st.rerun()
+            elif response.status_code == 409:
+                st.warning('⏳ Эта гипотеза уже перегенерируется — дождитесь завершения')
             else:
-                st.error(f'❌ Не удалось перегенерировать: {response.status_code}')
+                st.error(f'❌ Не удалось запустить перегенерацию: {response.status_code}')
                 st.code(response.text)
         except Exception as e:
             st.error(f'❌ Ошибка: {e}')
@@ -471,6 +475,7 @@ class LLMsWitnessUi:
 
         for i, hyp in enumerate(hypotheses, 1):
             with st.container():
+                is_regenerating = bool(hyp.get('regenerating'))
                 col1, col2, col3 = st.columns([5, 1, 1])
                 hyp_id = hyp.get('id', f"hyp_{i}")
                 unique_key = f"{key_prefix}{session_id}_{hyp_id}_{i}"
@@ -482,6 +487,19 @@ class LLMsWitnessUi:
                     if hyp.get('status'):
                         status_color = "green" if hyp.get('status') == "approved" else "red" if hyp.get('status') == "rejected" else "orange"
                         st.markdown(f"Статус: **<span style='color:{status_color}'>{hyp.get('status')}</span>**", unsafe_allow_html=True)
+
+                if is_regenerating:
+                    # Флаг regenerating хранится в Postgres — переживает
+                    # закрытие/перезагрузку страницы, поэтому честно отражает
+                    # реальное состояние на сервере, а не то, что видел браузер
+                    # в момент нажатия кнопки.
+                    st.warning(
+                        "⏳ Гипотеза генерируется заново — может занять до пары минут. "
+                        "Поля станут доступны, когда обновление завершится — нажмите «🔄 Обновить текущую сессию» "
+                        "во вкладке «Гипотезы», чтобы проверить готовность."
+                    )
+                    st.divider()
+                    continue
 
                 with col2:
                     if hyp.get('status') not in ['approved', 'rejected']:
@@ -505,7 +523,10 @@ class LLMsWitnessUi:
                     st.caption(
                         "Не согласны с формулировкой? Опишите, что поправить — "
                         "LLM перепишет гипотезу с учётом комментария и заново "
-                        "пересчитает проверки (ограничения/дубликаты/физика) и оценки."
+                        "пересчитает проверки (ограничения/дубликаты/физика) и оценки. "
+                        "Перегенерация идёт в фоне на сервере — можно закрыть вкладку, "
+                        "результат сохранится, проверить его можно кнопкой "
+                        "«Обновить текущую сессию»."
                     )
                     comment_val = st.text_area(
                         'Комментарий',
