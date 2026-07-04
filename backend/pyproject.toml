@@ -50,11 +50,11 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["backend/hypofactory"]
+packages = ["hypofactory"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
-testpaths = ["backend/tests"]
+testpaths = ["tests"]
 
 # CUDA-сборка torch (RTX 5070 Ti на машине разработки) — без этого uv ставит
 # torch+cpu из PyPI, и локальный эмбеддер (bge-m3) считает на CPU в разы медленнее.

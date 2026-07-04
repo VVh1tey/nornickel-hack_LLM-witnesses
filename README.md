@@ -45,15 +45,20 @@ docker compose run --rm indexer
 Проверить, что активный LLM-провайдер вообще отвечает, ДО индексации:
 
 ```bash
-uv run python backend/scripts/check_llm.py
+cd backend && uv run python scripts/check_llm.py
 ```
 
 ## Разработка (uv, без Docker)
 
+`pyproject.toml`/`uv.lock` бэка и фронта разделены — команды `uv` запускаются
+**из `backend/`** (или `frontend/` — для фронта отдельно):
+
 ```bash
+cd backend
 uv sync
-uv run python backend/scripts/build_corpus.py     # собрать corpus.jsonl / hypotheses_db.json / equipment.json
-uv run python backend/scripts/index_lightrag.py --pilot   # быстрый пилот (2 файла корпуса)
+uv run python scripts/build_corpus.py       # собрать corpus.jsonl / hypotheses_db.json / equipment.json
+uv run python scripts/index_lightrag.py --pilot   # быстрый пилот (2 файла корпуса)
+uv run pytest                               # тесты
 uv run uvicorn hypofactory.api.app:app --reload
 ```
 
