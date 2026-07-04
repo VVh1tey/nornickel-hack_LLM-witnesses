@@ -17,6 +17,10 @@ class LLMsWitnessUi:
         if 'files' not in self.state:
             self.state.files = dict()
 
+        if 'respones'  not in self.state:
+            self.state.responses = []
+        if 'constraints' not in self.state:
+            self.state.constraints = ''
 
         if 'goal' not in self.state:
             self.state.goal = ''
@@ -29,27 +33,34 @@ class LLMsWitnessUi:
         except Exception as e:
             raise Exception(f'Problem with api config[[\n{e}\n]]]')
 
-        if 'messages' not in self.state:
-            self.state.messages = []
-
 
     def readme(self):
         ...
 
     def get_responses(self):
-        ...
+        
+        if st.button('fetch' if not self.state.responses else 'fetch next', type='primary'):
+            counter = 0
+            try:
+                response = requests.get(self.addr + HANDLE_GET.replace('{session_id}',f'{counter}'))
+                if response.status_code == 200:
+                    data = response.json()
+                    self.state.responses.append(data)
+                    counter += 1
+            except Exception as e:
+                st.error(f'Erroe: {e}')
 
     def send_data(self):
-
         if st.button('Send data', type='primary', width='stretch'):
-
             try:
                 if self.state.files and self.state.goal:
-                    goal = {
-                        'goal':self.state.goal,   
+                    json = {
+                        'goal':self.state.goal,
+                        'contrains': self.state.constrains if self.state.constrains else None   
                     }
+
                     files = {filename: BytesIO(file.getvalue()) for filename, file in self.state.files.items()}
-                    status = requests.post(self.addr + HANDLE_POST, files=files, json=goal)
+                    status = requests.post(self.addr + HANDLE_POST, files=files, json=json)
                     if status.status_code == 200:
                         st.success('Successfull sended')
 
@@ -60,13 +71,7 @@ class LLMsWitnessUi:
 
     def write_goal(self):
         if self.state.goal:
-            columns = st.columns([16,1])
-            with columns[0]:
-                    st.write(self.state.goal)
-            with columns[1]:
-                if st.button('', icon='🗑', width='content', type='secondary'):
-                    self.state.goal = ''
-                    st.rerun()
+            st.write({'goal':self.state.goal, 'constraints': self.state.constraints})
 
     def show_files(self):
         if self.state.files:
@@ -77,7 +82,7 @@ class LLMsWitnessUi:
 
     def input_goal(self):
         goal = st.text_area('Placeholder for your genius idea:').strip()
-        create_button = st.button('Create goal', use_container_width=True,)
+        create_button = st.button('Create goal' if not self.state.goal else 'Update goal', use_container_width=True,)
         if create_button and goal:
             self.state.goal = goal
             st.rerun()
@@ -92,7 +97,7 @@ class LLMsWitnessUi:
         file = st.file_uploader('Upload files', FILE_TYPES)
         if file: 
             self.state.files[file.name] = file
-            st.success(f'{file.name} {file.size} uploaded')
+            st.success(f'{file.name} {file.size} was uploaded')
             st.rerun()
 
     def loop(self):
@@ -101,12 +106,20 @@ class LLMsWitnessUi:
             st.header('Hello llmwui!')
             self.load_file()
             self.show_files()
-            self.input_goal()    
+            self.input_goal()
+            if self.state.goal:
+                constraints = st.text_input('Input constrains', )    
+                if st.button('Update constraints', width='stretch'):
+                    self.state.constraints = constraints
+                    st.rerun()
+
+
             if self.state.goal:
                 self.send_data()
         
         with tabs[1]:
             st.table()
+            self.get_responses()
             
 
 if __name__ == "__main__":
