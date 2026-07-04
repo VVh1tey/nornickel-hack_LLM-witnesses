@@ -82,6 +82,11 @@ async def get_lightrag() -> LightRAG:
         # WARNING в логах (enable_rerank=True в QueryParam по умолчанию).
         rerank_model_func=rerank_model_func,
         min_rerank_score=0.3,
+        # Дефолт LightRAG (30с) даёт воркеру всего 60с (timeout+30, см.
+        # utils.priority_limit_async_func_call) — наш rerank() дергает Ollama
+        # по одному документу на каждый из нескольких найденных чанков, на
+        # медленной локальной модели это легко дольше 60с суммарно.
+        default_rerank_timeout=180 if is_slow_local_llm else 30,
         addon_params={
             "language": "Русский",
             "entity_types": get_profile(config.DOMAIN_PROFILE).entity_types,
