@@ -13,6 +13,9 @@ COPY frontend frontend
 RUN uv sync --frozen --no-dev
 
 ENV PATH="/app/.venv/bin:$PATH"
+# без этого print() в скриптах (index_lightrag.py и т.п.) оседает в буфере
+# stdout и не долетает до `docker compose logs`, пока буфер не заполнится
+ENV PYTHONUNBUFFERED=1
 
 EXPOSE 8000
 CMD ["uvicorn", "hypofactory.api.app:app", "--host", "0.0.0.0", "--port", "8000"]

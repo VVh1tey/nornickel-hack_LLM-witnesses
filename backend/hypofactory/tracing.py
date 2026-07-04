@@ -17,6 +17,7 @@ langfuse-*, UI на http://localhost:3000). Два уровня трейсинг
 from __future__ import annotations
 
 import logging
+import sys
 from contextlib import contextmanager
 from typing import Any, Iterator, Optional
 
@@ -53,16 +54,33 @@ def trace_generation(*, name: str, model: str, input: Any) -> Iterator[Any]:
         with trace_generation(name="...", model=..., input=messages) as gen:
             response = await ...
             gen.update(output=response)
-    """
+
+    ВАЖНО: ошибки самого вызова LLM (например httpx.ReadTimeout — у Ollama он
+    намеренно не ретраится, см. client.py) должны свободно пролетать наружу.
+    Раньше `yield` был внутри `try/except Exception`, из-за чего исключение
+    вызывающего кода ловилось ЗДЕСЬ и код пытался yield'нуть второй раз —
+    Python на этом падает с "generator didn't stop after throw()". Поэтому
+    setup (может упасть, если Langfuse недоступен) и использование (может
+    упасть по вине вызывающего кода, это НЕ наша ошибка) разделены."""
     if not _enabled:
         yield _NullGeneration()
         return
+
     try:
         from langfuse import get_client
 
         client = get_client()
-        with client.start_as_current_observation(as_type="generation", name=name, model=model, input=input) as gen:
-            yield gen
+        cm = client.start_as_current_observation(as_type="generation", name=name, model=model, input=input)
+        gen = cm.__enter__()
     except Exception:
-        logger.warning("Langfuse-трейсинг вызова %s не удался, продолжаем без него", name, exc_info=True)
+        logger.warning("Langfuse-трейсинг вызова %s недоступен, продолжаем без него", name, exc_info=True)
         yield _NullGeneration()
+        return
+
+    try:
+        yield gen
+    except BaseException:
+        cm.__exit__(*sys.exc_info())
+        raise
+    else:
+        cm.__exit__(None, None, None)

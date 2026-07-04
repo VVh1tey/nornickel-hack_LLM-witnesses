@@ -93,7 +93,7 @@ services:
     profiles: ["tools"]
     environment:
       - OLLAMA_HOST=http://ollama:11434
-    entrypoint: ["ollama", "pull", "qwen2.5:7b"]
+    entrypoint: ["ollama", "pull", "qwen3.5:4b"]
     depends_on:
       - ollama
 

@@ -112,6 +112,17 @@ def _cache_set(key: str, response: str) -> None:
         logger.warning("Не удалось записать LLM-кэш в %s", path)
 
 
+_THINK_TAG_RE = re.compile(r"<think>.*?</think>", re.DOTALL)
+
+
+def _strip_think_tags(text: str) -> str:
+    """Qwen3/3.5 умеют "thinking mode" — если рассуждения просочились прямо в
+    message.content как <think>...</think> (а не в отдельное поле ответа
+    Ollama), это ломает JSON-парсинг и просто мусорит текст гипотез. Дёшево
+    подчищаем на всякий случай, даже если по факту не понадобится."""
+    return _THINK_TAG_RE.sub("", text).strip()
+
+
 _CJK_RE = re.compile(r"[一-鿿぀-ヿ가-힣]")
 
 
@@ -396,7 +407,7 @@ class OllamaLLMClient:
                 response = await http_client.post(f"{config.OLLAMA_BASE_URL}/api/chat", json=payload)
                 response.raise_for_status()
                 data = response.json()
-        return data["message"]["content"]
+        return _strip_think_tags(data["message"]["content"])
 
     async def _chat(self, messages: list[dict], *, json_mode: bool = False, temperature: float = 0.3) -> str:
         cache_key = _cache_key(
