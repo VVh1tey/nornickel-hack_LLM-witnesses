@@ -67,7 +67,9 @@ class LLMsWitnessUi:
         return {"X-API-Key": self.api_key} if self.api_key else {}
 
     def export(self, format: str = "csv", unique_id: str = None):
-        """Экспорт сессии в указанном формате"""
+        """Экспорт сессии в указанном формате: одна кнопка на действие — пока
+        файла нет, показывает "Экспорт", после получения с сервера сама
+        превращается в "Скачать" (вместо двух кнопок рядом)."""
         if not self.state.session_id:
             st.warning("Нет активной сессии для экспорта")
             return
@@ -78,6 +80,23 @@ class LLMsWitnessUi:
 
         button_key = f"export_{format}_{unique_id}"
         data_key = f"export_data_{button_key}"
+
+        if data_key in st.session_state:
+            mime_map = {
+                "csv": "text/csv",
+                "json": "application/json",
+                "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                "pdf": "application/pdf",
+            }
+            st.download_button(
+                f'💾 Скачать {format.upper()}',
+                data=st.session_state[data_key],
+                file_name=f"{self.state.session_id}.{format}",
+                mime=mime_map.get(format, "application/octet-stream"),
+                key=f"dl_{button_key}",
+                width=256,
+            )
+            return
 
         if st.button(
             f'📤 Экспорт в {format.upper()}',
@@ -98,27 +117,12 @@ class LLMsWitnessUi:
                         # response.text пытается декодировать их как текст и
                         # выдаёт нечитаемую кашу вместо настоящего файла.
                         st.session_state[data_key] = response.content
+                        st.rerun()
                     else:
                         st.error(f'❌ Не удалось экспортировать: {response.status_code}')
                         st.code(response.text)
                 except Exception as e:
                     st.error(f'❌ Ошибка: {e}')
-
-        if data_key in st.session_state:
-            mime_map = {
-                "csv": "text/csv",
-                "json": "application/json",
-                "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                "pdf": "application/pdf",
-            }
-            st.download_button(
-                f'💾 Скачать {format.upper()}',
-                data=st.session_state[data_key],
-                file_name=f"{self.state.session_id}.{format}",
-                mime=mime_map.get(format, "application/octet-stream"),
-                key=f"dl_{button_key}",
-                help="Файл уже получен с сервера — сохранить его на диск",
-            )
 
     def readme(self):
         """Отображает информацию о приложении"""
