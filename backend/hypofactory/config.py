@@ -72,6 +72,12 @@ CHUNK_OVERLAP = 150
 # ranker/roadmap. Новый домен подключается профилем там же, без правок кода.
 DOMAIN_PROFILE = os.getenv("DOMAIN_PROFILE", "obogashchenie")
 
+# Авторизация API (см. api/app.py: middleware проверяет заголовок X-API-Key на
+# всех /api/* маршрутах). Пусто по умолчанию — авторизация ВЫКЛЮЧЕНА (локальная
+# разработка/тесты без лишней церемонии). Если разворачиваешь куда-то, кроме
+# localhost — обязательно задай непустой API_KEY в .env.
+API_KEY = os.getenv("API_KEY", "")
+
 # Langfuse (self-hosted, docker-compose.yml) — трейс вызовов LLM, см. tracing.py.
 # SDK (langfuse.get_client()) сам читает эти переменные из os.environ — здесь
 # только для наглядности/дефолта, как с QDRANT_URL выше.

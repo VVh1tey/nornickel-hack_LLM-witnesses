@@ -182,6 +182,13 @@ Postgres — либо просто `docker compose up -d ollama qdrant postgres`
   так/что поправить, и кнопка **Перегенерировать** — LLM переписывает
   формулировку гипотезы с учётом комментария и заново прогоняет её через
   verify/rank/roadmap (`POST .../regenerate`), id и место в списке сохраняются.
+  Ещё один раскрывающийся блок — **«Дорожная карта проверки»**: шаги roadmap
+  визуализированы как горизонтальный timeline (plotly, длительность каждого
+  шага в днях оценивает LLM в том же вызове, что и сам roadmap), под графиком —
+  редактируемые поля (шаг/ресурсы/критерий успеха/срок) с кнопкой «Сохранить» —
+  правки пишутся в сессию БЕЗ повторного вызова LLM (`POST .../roadmap`).
+  Roadmap строится только для топ-гипотез по рейтингу — у остальных блок
+  покажет, что дорожная карта не построена.
 - **📊 Аналитика** — детали активной сессии (имя, ID, статус, цель/ограничения),
   прогресс по узлам пайплайна, сводка (сколько гипотез принято/отклонено/без
   решения, средний score) и таблица со всеми оценками ранжирования
@@ -208,6 +215,7 @@ Postgres — либо просто `docker compose up -d ollama qdrant postgres`
 | `LLM_MAX_CONCURRENCY` | лимит параллельных вызовов LLM и эмбеддингов |
 | `DOMAIN_PROFILE` | предметная область (по умолчанию `obogashchenie`) — см. [«Адаптация под другие домены»](#адаптация-под-другие-домены) |
 | `PDF_FONT_PATH` | путь к Unicode TTF-шрифту (кириллица) для PDF-экспорта, если не найден автоматически (Docker — `fonts-dejavu-core`, Windows/macOS — системный Arial) |
+| `API_KEY` | авторизация API по заголовку `X-API-Key` на всех `/api/*` (пусто = выключена, только для локальной разработки); сгенерировать `openssl rand -hex 24` |
 | `HYPOFACTORY_FAKE_LLM=1` | форсировать `FakeLLM`/фейковые эмбеддинги независимо от провайдера (тесты, отладка без сети вообще) |
 | `LANGFUSE_HOST`, `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY` | трейс вызовов LLM (self-hosted Langfuse, см. ниже) |
 | `LANGFUSE_SALT`, `LANGFUSE_ENCRYPTION_KEY`, `LANGFUSE_NEXTAUTH_SECRET`, `LANGFUSE_PG_PASSWORD`, `LANGFUSE_CLICKHOUSE_PASSWORD`, `LANGFUSE_MINIO_PASSWORD`, `LANGFUSE_REDIS_AUTH` | секреты self-hosted Langfuse-стека (сгенерировать: `openssl rand -hex 16` / `32` / `12`, см. `.env.example`) |
@@ -226,6 +234,7 @@ Postgres — либо просто `docker compose up -d ollama qdrant postgres`
 | POST | `/api/sessions/{id}/name` | переименовать сессию: `{"name": "..."}` |
 | POST | `/api/sessions/{id}/hypotheses/{hid}/feedback` | HITL: `{"action": "approve"\|"reject"\|"skip", "comment": "..."}` (`comment` необязателен) |
 | POST | `/api/sessions/{id}/hypotheses/{hid}/regenerate` | переписать гипотезу с учётом `{"comment": "..."}` (LLM) и заново прогнать verify/rank/roadmap |
+| POST | `/api/sessions/{id}/hypotheses/{hid}/roadmap` | ручная правка дорожной карты: `{"steps": [{"step", "resources", "success_criteria", "duration_days"}, ...]}` — БЕЗ вызова LLM |
 | POST | `/api/sessions/{id}/rerank` | пересортировка по новым весам критериев без вызова LLM |
 | GET | `/api/sessions/{id}/export?format=csv\|json\|docx\|pdf` | выгрузка гипотез |
 | GET | `/api/sessions/{id}/hypotheses/{hid}/graph` | HTML-граф сущностей/связей вокруг гипотезы |

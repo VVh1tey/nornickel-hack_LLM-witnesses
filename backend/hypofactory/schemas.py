@@ -73,6 +73,7 @@ class RoadmapStep(BaseModel):
     step: str
     resources: Optional[str] = None
     success_criteria: Optional[str] = None
+    duration_days: Optional[int] = None  # оценка длительности шага в днях — для timeline (см. pipeline/roadmap.py)
 
 
 class Hypothesis(BaseModel):

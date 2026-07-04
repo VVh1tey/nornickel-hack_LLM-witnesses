@@ -2,6 +2,7 @@
 import requests
 import json
 import streamlit as st
+import plotly.graph_objects as go
 from io import BytesIO
 import time
 import uuid
@@ -15,6 +16,7 @@ HANDLE_EXPORT = '/api/sessions/{session_id}/export'
 HANDLE_FEEDBACK = '/api/sessions/{session_id}/hypotheses/{hypothesis_id}/feedback'
 HANDLE_REGENERATE = '/api/sessions/{session_id}/hypotheses/{hypothesis_id}/regenerate'
 HANDLE_RENAME = '/api/sessions/{session_id}/name'
+HANDLE_ROADMAP = '/api/sessions/{session_id}/hypotheses/{hypothesis_id}/roadmap'
 
 FILE_TYPES = ['xls', 'xlsx']
 
@@ -44,18 +46,25 @@ class LLMsWitnessUi:
         if 'session_name' not in self.state:
             self.state.session_name = str()
 
+        self.api_key = None
         try:
             with open('../configs/api.json', 'r') as f:
                 data = json.load(f)
                 self.port = data['port']
                 self.host = data['host']
                 self.addr = f"http://{self.host}:{self.port}"
+                self.api_key = data.get('api_key') or None
         except Exception as e:
             # Дефолтные значения для разработки
             self.port = 8000
             self.host = 'localhost'
             self.addr = f"http://{self.host}:{self.port}"
             st.warning(f'⚠️ Не найден configs/api.json, использую адрес по умолчанию: {self.addr}')
+
+    def _headers(self) -> dict:
+        """X-API-Key на все запросы к бэку — если он не настроил API_KEY
+        (см. .env), бэк просто игнорирует заголовок."""
+        return {"X-API-Key": self.api_key} if self.api_key else {}
 
     def export(self, format: str = "csv", unique_id: str = None):
         """Экспорт сессии в указанном формате"""
@@ -81,7 +90,8 @@ class LLMsWitnessUi:
                 try:
                     response = requests.get(
                         self.addr + HANDLE_EXPORT.replace('{session_id}', self.state.session_id),
-                        params={'format': format}
+                        params={'format': format},
+                        headers=self._headers(),
                     )
                     if response.status_code == 200:
                         # response.content - сырые байты: для docx (бинарный zip)
@@ -144,7 +154,7 @@ class LLMsWitnessUi:
             ):
                 with st.spinner('Загружаем список сессий...'):
                     try:
-                        response = requests.get(self.addr + HANDLE_GET_ALL)
+                        response = requests.get(self.addr + HANDLE_GET_ALL, headers=self._headers())
                         if response.status_code == 200:
                             sessions = response.json()
                             self.state.responses = sessions
@@ -166,7 +176,8 @@ class LLMsWitnessUi:
                     with st.spinner('Обновляем данные сессии...'):
                         try:
                             response = requests.get(
-                                self.addr + HANDLE_GET.replace('{session_id}', self.state.session_id)
+                                self.addr + HANDLE_GET.replace('{session_id}', self.state.session_id),
+                                headers=self._headers(),
                             )
                             if response.status_code == 200:
                                 self.state.session_data = response.json()
@@ -223,7 +234,8 @@ class LLMsWitnessUi:
                     response = requests.post(
                         self.addr + HANDLE_POST,
                         files=files,
-                        data=data
+                        data=data,
+                        headers=self._headers(),
                     )
 
                     if response.status_code == 200:
@@ -250,7 +262,8 @@ class LLMsWitnessUi:
                 body['comment'] = comment
             response = requests.post(
                 self.addr + HANDLE_FEEDBACK.replace('{session_id}', session_id).replace('{hypothesis_id}', hypothesis_id),
-                json=body
+                json=body,
+                headers=self._headers(),
             )
             if response.status_code == 200:
                 st.success(f'✅ Отправлен фидбэк: {action}')
@@ -275,7 +288,8 @@ class LLMsWitnessUi:
         try:
             response = requests.post(
                 self.addr + HANDLE_REGENERATE.replace('{session_id}', session_id).replace('{hypothesis_id}', hypothesis_id),
-                json={'comment': comment.strip()}
+                json={'comment': comment.strip()},
+                headers=self._headers(),
             )
             if response.status_code == 200:
                 st.info('⏳ Перегенерация запущена в фоне — займёт до пары минут. Можно закрыть вкладку/переключиться, результат сохранится на сервере. Загляните позже и нажмите «Обновить текущую сессию».')
@@ -297,7 +311,8 @@ class LLMsWitnessUi:
         try:
             response = requests.post(
                 self.addr + HANDLE_RENAME.replace('{session_id}', session_id),
-                json={'name': new_name.strip()}
+                json={'name': new_name.strip()},
+                headers=self._headers(),
             )
             if response.status_code == 200:
                 st.success('✅ Сессия переименована')
@@ -308,11 +323,30 @@ class LLMsWitnessUi:
         except Exception as e:
             st.error(f'❌ Ошибка: {e}')
 
+    def send_roadmap_update(self, session_id: str, hypothesis_id: str, steps: list):
+        """Ручная правка дорожной карты (ресурсы/сроки/шаги) — БЕЗ вызова LLM,
+        просто перезаписывает roadmap на сервере (см. api/app.py: /roadmap)."""
+        try:
+            response = requests.post(
+                self.addr + HANDLE_ROADMAP.replace('{session_id}', session_id).replace('{hypothesis_id}', hypothesis_id),
+                json={'steps': steps},
+                headers=self._headers(),
+            )
+            if response.status_code == 200:
+                st.success('✅ Дорожная карта сохранена')
+                self.get_session_data(session_id)
+                st.rerun()
+            else:
+                st.error(f'❌ Не удалось сохранить дорожную карту: {response.status_code}')
+        except Exception as e:
+            st.error(f'❌ Ошибка: {e}')
+
     def get_session_data(self, session_id: str):
         """Получение данных конкретной сессии"""
         try:
             response = requests.get(
-                self.addr + HANDLE_GET.replace('{session_id}', session_id)
+                self.addr + HANDLE_GET.replace('{session_id}', session_id),
+                headers=self._headers(),
             )
             if response.status_code == 200:
                 self.state.session_data = response.json()
@@ -347,7 +381,8 @@ class LLMsWitnessUi:
 
                     response = requests.post(
                         self.addr + HANDLE_RERANK.replace('{session_id}', self.state.session_id),
-                        json=weights_data
+                        json=weights_data,
+                        headers=self._headers(),
                     )
 
                     if response.status_code == 200:
@@ -546,7 +581,86 @@ class LLMsWitnessUi:
                     ):
                         self.send_regenerate(session_id, hyp_id, comment_val)
 
+                self.render_roadmap(hyp, session_id, unique_key)
+
                 st.divider()
+
+    def render_roadmap(self, hyp: dict, session_id: str, unique_key: str):
+        """Дорожная карта проверки гипотезы: timeline (plotly) + редактируемые
+        поля (ресурсы/сроки/шаги), правки сохраняются без повторного вызова LLM
+        (см. send_roadmap_update — POST .../roadmap). Roadmap строится только
+        для топ-N гипотез по рейтингу (см. backend pipeline/graph.py), поэтому
+        у части гипотез он может быть пустым."""
+        roadmap = hyp.get('roadmap') or []
+        with st.expander("🗺️ Дорожная карта проверки"):
+            if not roadmap:
+                st.info("Дорожная карта не построена (строится только для топ-гипотез по рейтингу)")
+                return
+
+            # Длительность по каждому шагу — оценка от LLM (build_roadmap);
+            # если модель её не дала, берём условные 3 дня только для
+            # визуализации (сохранённое значение шага при этом не меняем,
+            # пока пользователь сам не отредактирует и не сохранит).
+            durations = [step.get('duration_days') or 3 for step in roadmap]
+            starts = [0]
+            for d in durations[:-1]:
+                starts.append(starts[-1] + d)
+            labels = [
+                (step.get('step') or f'Шаг {i + 1}')[:60]
+                for i, step in enumerate(roadmap)
+            ]
+
+            fig = go.Figure()
+            for label, start, duration in zip(labels, starts, durations):
+                fig.add_trace(go.Bar(
+                    y=[label],
+                    x=[duration],
+                    base=[start],
+                    orientation='h',
+                    marker=dict(color='#2a78d6'),
+                    showlegend=False,
+                    hovertemplate=f"{label}<br>День {start}–{start + duration}<extra></extra>",
+                ))
+            fig.update_layout(
+                xaxis_title="День проверки (от начала дорожной карты)",
+                yaxis=dict(autorange="reversed"),
+                height=90 + 40 * len(roadmap),
+                margin=dict(l=10, r=10, t=10, b=40),
+            )
+            st.plotly_chart(fig, use_container_width=True, key=f"roadmap_chart_{unique_key}")
+
+            st.caption("Правки ресурсов/сроков/шагов — сохраняются сразу, без повторного вызова LLM")
+            edited_steps = []
+            for i, step in enumerate(roadmap):
+                col1, col2, col3 = st.columns([3, 3, 1])
+                with col1:
+                    step_text = st.text_input(
+                        'Шаг', value=step.get('step') or '',
+                        key=f"roadmap_step_{unique_key}_{i}", label_visibility="collapsed",
+                    )
+                with col2:
+                    resources = st.text_input(
+                        'Ресурсы', value=step.get('resources') or '',
+                        placeholder="Ресурсы", key=f"roadmap_res_{unique_key}_{i}", label_visibility="collapsed",
+                    )
+                with col3:
+                    duration = st.number_input(
+                        'Дней', value=int(step.get('duration_days') or 3), min_value=1,
+                        key=f"roadmap_dur_{unique_key}_{i}", label_visibility="collapsed",
+                    )
+                success_criteria = st.text_input(
+                    'Критерий успеха', value=step.get('success_criteria') or '',
+                    placeholder="Критерий успеха", key=f"roadmap_crit_{unique_key}_{i}",
+                )
+                edited_steps.append({
+                    'step': step_text,
+                    'resources': resources or None,
+                    'success_criteria': success_criteria or None,
+                    'duration_days': int(duration),
+                })
+
+            if st.button("💾 Сохранить дорожную карту", key=f"roadmap_save_{unique_key}"):
+                self.send_roadmap_update(session_id, hyp.get('id'), edited_steps)
 
     def write_goal(self):
         """Отображение текущей цели"""

@@ -20,8 +20,8 @@ import shutil
 import uuid
 from typing import Literal, Optional
 
-from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, UploadFile
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from pydantic import BaseModel
 
 from hypofactory import config
@@ -39,9 +39,21 @@ from hypofactory.pipeline.target_spec import parse_target
 from hypofactory.pipeline.verification import build_known_hypotheses_index, verify
 from hypofactory.rag.graph_viz import graph_stats, render_full_graph_html, render_graph_html
 from hypofactory.rag.retrieve import retrieve
-from hypofactory.schemas import HypothesisStatus, RankingWeights
+from hypofactory.schemas import HypothesisStatus, RankingWeights, RoadmapStep
 
 app = FastAPI(title="Фабрика гипотез API")
+
+
+@app.middleware("http")
+async def api_key_auth(request: Request, call_next):
+    """Авторизация по X-API-Key на всех /api/* (см. config.API_KEY). Если
+    ключ не задан в .env — авторизация выключена (локальная разработка/тесты
+    без лишней церемонии); задать API_KEY обязательно перед тем, как выставлять
+    сервис куда-то дальше localhost."""
+    if config.API_KEY and request.url.path.startswith("/api/"):
+        if request.headers.get("X-API-Key") != config.API_KEY:
+            return JSONResponse(status_code=401, content={"detail": "Неверный или отсутствующий заголовок X-API-Key"})
+    return await call_next(request)
 
 UPLOADS_DIR = config.DATA_DIR / "sessions" / "uploads"
 
@@ -243,6 +255,34 @@ async def rerank_session(session_id: str, weights: RankingWeights):
     session.hypotheses = rerank_hypotheses(session.hypotheses, weights)
     await save_session(session)
     return session.to_dict()
+
+
+class RoadmapStepUpdate(BaseModel):
+    step: str
+    resources: Optional[str] = None
+    success_criteria: Optional[str] = None
+    duration_days: Optional[int] = None
+
+
+class RoadmapUpdateRequest(BaseModel):
+    steps: list[RoadmapStepUpdate]
+
+
+@app.post("/api/sessions/{session_id}/hypotheses/{hypothesis_id}/roadmap")
+async def update_roadmap(session_id: str, hypothesis_id: str, body: RoadmapUpdateRequest):
+    """Ручная правка дорожной карты экспертом — БЕЗ вызова LLM (в отличие от
+    /regenerate, который переписывает саму гипотезу). Просто перезаписывает
+    hyp.roadmap значениями из формы (см. фронт: редактируемые поля рядом с timeline)."""
+    session = await load_session(session_id)
+    if session is None:
+        raise HTTPException(404, "сессия не найдена")
+    hyp = next((h for h in session.hypotheses if h.id == hypothesis_id), None)
+    if hyp is None:
+        raise HTTPException(404, "гипотеза не найдена")
+
+    hyp.roadmap = [RoadmapStep(**s.model_dump()) for s in body.steps]
+    await save_session(session)
+    return hyp.model_dump(mode="json")
 
 
 @app.get("/api/sessions/{session_id}/export")

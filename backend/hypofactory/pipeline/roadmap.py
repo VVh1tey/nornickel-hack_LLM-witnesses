@@ -4,12 +4,16 @@ from __future__ import annotations
 
 from pydantic import BaseModel
 
+from hypofactory import config
+from hypofactory.domain_profile import get_profile
 from hypofactory.llm.client import get_client
 from hypofactory.schemas import Hypothesis, RoadmapStep
 
+_PROFILE = get_profile(config.DOMAIN_PROFILE)
+
 ROADMAP_SYSTEM_PROMPT = (
-    "Ты планируешь программу лабораторной/промышленной верификации исследовательской "
-    "гипотезы. Отвечай только на русском языке."
+    f"Ты — {_PROFILE.expert_role}, планируешь программу лабораторной/промышленной "
+    "верификации исследовательской гипотезы. Отвечай только на русском языке."
 )
 
 ROADMAP_PROMPT = """Гипотеза: {statement}
@@ -18,7 +22,10 @@ ROADMAP_PROMPT = """Гипотеза: {statement}
 
 Составь дорожную карту проверки гипотезы: 3-5 последовательных шагов
 (лабораторные и/или промышленные эксперименты), для каждого шага укажи
-необходимые ресурсы и критерий успеха/провала."""
+необходимые ресурсы, критерий успеха/провала и оценку длительности этого
+шага в днях (duration_days) — целое число, реалистичная оценка для
+лабораторного/промышленного эксперимента такого масштаба (например 3-5 для
+лабораторного теста, 14-30 для промышленных испытаний)."""
 
 
 class RoadmapDraft(BaseModel):
