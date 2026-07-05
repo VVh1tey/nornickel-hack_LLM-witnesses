@@ -378,9 +378,10 @@ class LLMsWitnessUi:
             with st.spinner('Пересчитываем рейтинг...'):
                 try:
                     weights_data = {
-                        'relevance': float(self.state.weights.get('relevance', 1.0)),
                         'novelty': float(self.state.weights.get('novelty', 1.0)),
-                        'feasibility': float(self.state.weights.get('feasibility', 1.0))
+                        'feasibility': float(self.state.weights.get('feasibility', 1.0)),
+                        'impact': float(self.state.weights.get('impact', 1.0)),
+                        'risk': float(self.state.weights.get('risk', 1.0)),
                     }
 
                     response = requests.post(
@@ -772,51 +773,45 @@ class LLMsWitnessUi:
 
             col1, col2 = st.columns(2)
             with col1:
-                relevance = st.slider(
-                    'Релевантность', 0, 10,
-                    value=int(self.state.weights.get('relevance', 5)),
-                    key="slider_relevance",
-                    help="Насколько гипотеза должна быть привязана к заявленной цели",
-                )
                 novelty = st.slider(
                     'Новизна', 0, 10,
                     value=int(self.state.weights.get('novelty', 5)),
                     key="slider_novelty",
                     help="Насколько гипотеза должна быть непохожа на уже известные/опробованные решения",
                 )
-
-            with col2:
                 feasibility = st.slider(
                     'Реализуемость', 0, 10,
                     value=int(self.state.weights.get('feasibility', 5)),
                     key="slider_feasibility",
                     help="Насколько легко гипотезу внедрить с текущим оборудованием",
                 )
+
+            with col2:
                 impact = st.slider(
-                    'Эффект (опционально)', 0, 10,
+                    'Эффект', 0, 10,
                     value=int(self.state.weights.get('impact', 5)),
                     key="slider_impact",
                     help="Насколько велик ожидаемый эффект на целевой KPI",
                 )
+                risk = st.slider(
+                    'Риск', 0, 10,
+                    value=int(self.state.weights.get('risk', 5)),
+                    key="slider_risk",
+                    help="Насколько сильно штрафовать рискованные гипотезы (выше вес — рискованное падает в рейтинге)",
+                )
 
-            if st.button(
-                '💾 Сохранить веса',
-                use_container_width=True,
-                help="Сохранить веса — они применятся при следующей генерации и при нажатии Rerank",
-            ):
-                self.state.weights = {
-                    'relevance': float(relevance),
-                    'novelty': float(novelty),
-                    'feasibility': float(feasibility),
-                    'impact': float(impact)
-                }
-                st.success('✅ Веса сохранены!')
-                st.rerun()
+            # Пишем в state сразу, без отдельной кнопки "Сохранить": иначе
+            # передвинутый, но не сохранённый явно ползунок молча не попадает
+            # в запрос (баг, из-за которого казалось, что ползунки не работают).
+            self.state.weights = {
+                'novelty': float(novelty),
+                'feasibility': float(feasibility),
+                'impact': float(impact),
+                'risk': float(risk),
+            }
 
-            # Отображаем текущие веса
-            if self.state.weights:
-                with st.expander("📊 Текущие веса"):
-                    st.json(self.state.weights)
+            with st.expander("📊 Текущие веса"):
+                st.json(self.state.weights)
 
     def load_file(self):
         """Загрузка файла"""
