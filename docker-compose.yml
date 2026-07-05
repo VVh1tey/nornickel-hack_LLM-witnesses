@@ -88,8 +88,10 @@ services:
               capabilities: [gpu]
 
   # разовая загрузка моделей (первый запуск, или после смены OLLAMA_MODEL/
-  # RERANK_MODEL в .env): docker compose run --rm ollama-pull — тянет и
-  # основную LLM, и реранкер (llm/rerank.py) одной командой.
+  # RERANK_MODEL/OLLAMA_VISION_MODEL в .env): docker compose run --rm
+  # ollama-pull — тянет основную LLM, реранкер (llm/rerank.py) и локальную
+  # vision-модель (fallback для описания схем/картинок, см. llm/client.py
+  # _describe_image_ollama) одной командой.
   ollama-pull:
     image: ollama/ollama:latest
     profiles: ["tools"]
@@ -101,6 +103,7 @@ services:
       - |
         ollama pull ${OLLAMA_MODEL:-qwen2.5:7b}
         ollama pull ${RERANK_MODEL:-dengcao/Qwen3-Reranker-0.6B:Q8_0}
+        ollama pull ${OLLAMA_VISION_MODEL:-glm-ocr}
     depends_on:
       - ollama
 

@@ -60,6 +60,30 @@ def is_fake_forced() -> bool:
     return os.getenv("HYPOFACTORY_FAKE_LLM") == "1"
 
 
+def _yandex_response_format(schema: type[BaseModel]) -> dict:
+    """Yandex structured output (в отличие от обычного pydantic model_json_schema())
+    требует, чтобы ВСЕ поля были в "required" — поля с default (Optional[...] = None,
+    Field(default_factory=list) и т.п.) pydantic туда не кладёт, и Yandex падает:
+    'Invalid JSON Schema: all fields must be required, "<поле>" is optional'
+    (поймано на реальном прогоне на TargetSpec.equipment). Дублирует required
+    вручную поверх исходной схемы — на нашей стороне валидация всё равно через
+    pydantic, наличие поля в JSON-schema "required" на неё не влияет."""
+
+    def _force_required(node: Any) -> None:
+        if isinstance(node, dict):
+            if node.get("type") == "object" and "properties" in node:
+                node["required"] = list(node["properties"].keys())
+            for value in node.values():
+                _force_required(value)
+        elif isinstance(node, list):
+            for item in node:
+                _force_required(item)
+
+    json_schema = schema.model_json_schema()
+    _force_required(json_schema)
+    return {"json_schema": json_schema, "name": schema.__name__, "strict": True}
+
+
 def _strip_json_fences(text: str) -> str:
     """Некоторые модели оборачивают JSON в ```json ... ``` даже при
     format="json" — на всякий случай подчищаем перед валидацией."""
@@ -142,6 +166,32 @@ def _retriable_exceptions() -> tuple[type[BaseException], ...]:
         return (yexc.AIStudioError, yexc.AioRpcError)
     except ImportError:
         return (Exception,)
+
+
+async def _describe_image_ollama(image_bytes: bytes, prompt: str) -> str:
+    """Локальная vision-модель через Ollama (config.OLLAMA_VISION_MODEL,
+    отдельная от основной текстовой — качается `docker compose run --rm
+    ollama-pull`). Используется и как основная реализация в OllamaLLMClient,
+    и как фолбэк в YandexLLMClient, если vision-модель Yandex недоступна
+    (403/нет прав на конкретную модель — проверено на реальном прогоне)."""
+    import base64
+
+    b64 = base64.b64encode(image_bytes).decode("utf-8")
+    payload = {
+        "model": config.OLLAMA_VISION_MODEL,
+        "messages": [{"role": "user", "content": prompt, "images": [b64]}],
+        "stream": False,
+        # num_ctx: дефолтные 4096 у Ollama на плотных изображениях (много
+        # vision-токенов) не хватает даже с коротким текстовым промптом —
+        # поймано на реальном файле ("request (4148 tokens) exceeds the
+        # available context size (4096 tokens)"). 8192 — с запасом.
+        "options": {"temperature": 0.2, "num_predict": config.OLLAMA_NUM_PREDICT, "num_ctx": 8192},
+    }
+    async with httpx.AsyncClient(timeout=httpx.Timeout(180, connect=10)) as http_client:
+        response = await http_client.post(f"{config.OLLAMA_BASE_URL}/api/chat", json=payload)
+        response.raise_for_status()
+        data = response.json()
+    return _strip_think_tags(data["message"]["content"])
 
 
 class FakeLLM:
@@ -232,7 +282,12 @@ class YandexLLMClient:
         if system_prompt:
             messages.append({"role": "system", "text": system_prompt})
         if history_messages:
-            messages.extend(history_messages)
+            # LightRAG (и наш собственный repair-retry в acomplete_json) шлют
+            # историю в OpenAI-формате {"role","content"} — SDK Yandex же
+            # требует "text" в КАЖДОМ сообщении, иначе падает с "should have
+            # a text or tool_results key" (поймано на реальном прогоне индексации).
+            for m in history_messages:
+                messages.append({"role": m["role"], "text": m.get("text", m.get("content", ""))})
         messages.append({"role": "user", "text": prompt})
         return messages
 
@@ -295,12 +350,13 @@ class YandexLLMClient:
         и повтор делаем в любом случае — так надёжнее, чем полагаться на режим.
         """
         messages = self._messages(prompt, system_prompt, None)
+        response_format = _yandex_response_format(schema)
 
         async def _run(msgs: list[dict]) -> str:
             async with self._semaphore:
                 model = self._async_sdk.models.completions(
                     config.YC_MODEL, model_version="rc"
-                ).configure(temperature=temperature, response_format=schema)
+                ).configure(temperature=temperature, response_format=response_format)
                 result = await model.run(msgs)
                 return _extract_text(result)
 
@@ -353,7 +409,15 @@ class YandexLLMClient:
         with tracing.trace_generation(
             name="yandex.adescribe_image", model=config.YC_VISION_MODEL, input=prompt
         ) as gen:
-            response = await _call()
+            try:
+                response = await _call()
+            except Exception as e:
+                # У Yandex vision-модель (gemma-3-27b-it) может быть недоступна
+                # отдельно от текстовых моделей — на реальном прогоне поймали
+                # 403 Forbidden именно на vision при рабочих текстовых моделях.
+                # Не роняем весь ingestion — падаем на локальную vision через Ollama.
+                logger.warning("Yandex vision недоступен (%s) — фолбэк на локальную Ollama-vision", e)
+                response = await _describe_image_ollama(image_bytes, prompt)
             gen.update(output=response)
         return response
 
@@ -362,9 +426,9 @@ class OllamaLLMClient:
     """Локальный LLM через Ollama (docker-compose: сервис `ollama` + разовая
     загрузка модели `docker compose run --rm ollama-pull`). Тот же интерфейс,
     что и YandexLLMClient — вызывающий код (LangGraph, LightRAG, vision-OCR) не
-    знает, какой бэкенд используется. Модель (qwen2.5:7b по умолчанию, GPU
-    через docker-compose deploy.resources) — vision не поддерживает,
-    adescribe_image отдаёт заглушку."""
+    знает, какой бэкенд используется. Основная модель (qwen2.5:7b по умолчанию)
+    текстовая, vision не умеет — adescribe_image отдельно ходит в
+    config.OLLAMA_VISION_MODEL (см. _describe_image_ollama)."""
 
     def __init__(self) -> None:
         self._semaphore = asyncio.Semaphore(config.LLM_MAX_CONCURRENCY)
@@ -496,7 +560,13 @@ class OllamaLLMClient:
             return schema.model_validate_json(_strip_json_fences(raw_repaired))
 
     async def adescribe_image(self, image_bytes: bytes, prompt: str, mime_type: str = "image/png") -> str:
-        return "[Ollama: маленькая текстовая модель без vision — для описания схем нужен LLM_PROVIDER=yandex]"
+        with tracing.trace_generation(
+            name="ollama.adescribe_image", model=config.OLLAMA_VISION_MODEL, input=prompt
+        ) as gen:
+            async with self._semaphore:
+                response = await _describe_image_ollama(image_bytes, prompt)
+            gen.update(output=response)
+        return response
 
 
 _client: Optional[Any] = None

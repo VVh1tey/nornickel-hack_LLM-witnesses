@@ -21,6 +21,22 @@ _RELATION_RE = re.compile(r"^(.*?) -\[(.*?)\]-> (.*)$")
 
 GRAPHML_PATH = config.LIGHTRAG_DIR / "graph_chunk_entity_relation.graphml"
 
+_FREEZE_PHYSICS_JS = """
+<script>
+  network.once("stabilizationIterationsDone", function () {
+    network.setOptions({ physics: false });
+  });
+</script>
+"""
+
+
+def _freeze_physics_after_stabilization(html: str) -> str:
+    """pyvis по умолчанию гоняет силовую симуляцию бесконечно — на графе с
+    несвязными подкомпонентами (а у нас их много, сущности из разных чанков
+    не всегда пересекаются) часть узлов никогда не успокаивается и трясётся
+    вечно. Даём симуляции один раз стабилизироваться и дальше замораживаем."""
+    return html.replace("</body>", _FREEZE_PHYSICS_JS + "</body>")
+
 
 def graph_stats() -> dict:
     """Быстрая проверка «что вообще есть в графе» без дашборда: количество
@@ -59,7 +75,7 @@ def render_full_graph_html(height: str = "800px", max_nodes: int = 300) -> str:
     for u, v, attrs in g.edges(data=True):
         net.add_edge(u, v, label=str(attrs.get("keywords", "")))
 
-    return net.generate_html()
+    return _freeze_physics_after_stabilization(net.generate_html())
 
 
 def render_graph_html(result: RetrievalResult, height: str = "500px") -> str:
@@ -86,4 +102,4 @@ def render_graph_html(result: RetrievalResult, height: str = "500px") -> str:
     if not added:
         net.add_node("Нет данных", label="Граф пуст — нет извлечённых сущностей/связей")
 
-    return net.generate_html()
+    return _freeze_physics_after_stabilization(net.generate_html())
