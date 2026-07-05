@@ -306,7 +306,7 @@ https://disk.yandex.ru/d/xn47XDhpcuyeFw
    поднимать ещё не нужно).
 3. Восстановить данные из бэкапа:
    ```bash
-   ./scripts/restore_data.sh
+   python scripts/restore_data.py
    ```
 4. Только теперь поднимать стек:
    ```bash
@@ -326,17 +326,20 @@ Qdrant — внутри Docker-тома, файлом не вытащить на
 проект без повторной индексации (часы работы):
 
 ```bash
-./scripts/backup_data.sh     # соберёт backup/data.tar.gz + backup/qdrant-data.tar.gz
+python scripts/backup_data.py     # соберёт backup/data.tar.gz + backup/qdrant-data.tar.gz
 ```
 
 Передать получателю репозиторий (git clone/zip) и папку `backup/` рядом с
 ним, дальше на его машине:
 
 ```bash
-./scripts/restore_data.sh
+python scripts/restore_data.py
 docker compose up -d
 docker compose run --rm ollama-pull   # модели Ollama не архивируются, качаются заново
 ```
+
+Скрипты на Python — одинаково работают на Windows/macOS/Linux, без
+проблем с путями в `docker run -v`, которые были у shell-версии.
 
 История сессий Postgres в бэкап не входит (без неё список сессий просто
 начнётся с нуля, на работу пайплайна не влияет). Имя Qdrant-тома
