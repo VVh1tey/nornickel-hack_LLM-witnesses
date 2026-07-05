@@ -28,6 +28,10 @@ YC_FOLDER_ID = os.getenv("YC_FOLDER_ID", "")
 YC_API_KEY = os.getenv("YC_API_KEY", "")
 # модель для генерации/экстракции: pro, не lite — качество экстракции определяет граф
 YC_MODEL = os.getenv("YC_MODEL", "yandexgpt")
+# без явного max_tokens Yandex обрезает длинные структурированные ответы
+# (список из 10+ гипотез) на середине строки -> невалидный JSON (поймано на
+# реальном прогоне: "EOF while parsing a string")
+YC_MAX_TOKENS = int(os.getenv("YC_MAX_TOKENS", "8000"))
 # на момент написания только эта модель в AI Studio понимает картинки (sdk.chat.completions)
 YC_VISION_MODEL = os.getenv("YC_VISION_MODEL", "gemma-3-27b-it")
 

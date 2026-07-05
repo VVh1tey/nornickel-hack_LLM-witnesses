@@ -314,7 +314,9 @@ class YandexLLMClient:
         )
         async def _call() -> str:
             async with self._semaphore:
-                model = self._async_sdk.models.completions(config.YC_MODEL).configure(temperature=temperature)
+                model = self._async_sdk.models.completions(config.YC_MODEL).configure(
+                    temperature=temperature, max_tokens=config.YC_MAX_TOKENS
+                )
                 result = await model.run(messages)
                 return _extract_text(result)
 
@@ -330,7 +332,9 @@ class YandexLLMClient:
         cached = _cache_get(cache_key)
         if cached is not None:
             return cached
-        model = self._sync_sdk.models.completions(config.YC_MODEL).configure(temperature=temperature)
+        model = self._sync_sdk.models.completions(config.YC_MODEL).configure(
+            temperature=temperature, max_tokens=config.YC_MAX_TOKENS
+        )
         result = model.run(messages)
         response = _extract_text(result)
         _cache_set(cache_key, response)
@@ -356,7 +360,7 @@ class YandexLLMClient:
             async with self._semaphore:
                 model = self._async_sdk.models.completions(
                     config.YC_MODEL, model_version="rc"
-                ).configure(temperature=temperature, response_format=response_format)
+                ).configure(temperature=temperature, response_format=response_format, max_tokens=config.YC_MAX_TOKENS)
                 result = await model.run(msgs)
                 return _extract_text(result)
 
